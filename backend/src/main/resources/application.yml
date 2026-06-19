@@ -1,0 +1,24 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: user-manager
+  datasource:
+    url: jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: never
+
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.example.usermanager.entity
+  configuration:
+    map-underscore-to-camel-case: true
+
+jwt:
+  secret: 9a4f2c8d3e5f1g7h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z
+  expiration: 86400000 # 24 hours

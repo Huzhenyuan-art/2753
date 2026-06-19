@@ -1,0 +1,30 @@
+package com.example.usermanager.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.usermanager.entity.User;
+import com.example.usermanager.mapper.UserMapper;
+import com.example.usermanager.service.UserService;
+import com.example.usermanager.util.JwtUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+@Service
+public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtUtils jwtUtils;
+
+    @Override
+    public String login(String username, String password) {
+        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user != null && passwordEncoder.matches(password, user.getPassword())) {
+            return jwtUtils.generateToken(username);
+        }
+        return null;
+    }
+}

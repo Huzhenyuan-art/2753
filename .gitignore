@@ -1,0 +1,12 @@
+.git
+node_modules
+vendor
+dist
+build
+target
+*.log
+.DS_Store
+.idea
+.vscode
+__pycache__
+.venv
