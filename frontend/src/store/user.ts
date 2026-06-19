@@ -31,6 +31,15 @@ export const useUserStore = defineStore('user', {
         return null
       }
     },
+    setUserInfo(info: Partial<UserInfo>) {
+      if (!this.userInfo) return
+      this.$patch({
+        userInfo: {
+          ...this.userInfo,
+          ...info
+        }
+      })
+    },
     logout() {
       this.token = ''
       this.userInfo = null

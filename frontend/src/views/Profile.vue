@@ -40,9 +40,9 @@
         <div v-loading="loading" class="profile-content">
           <div class="profile-card glass-panel">
             <div class="avatar-section">
-              <el-avatar :size="120" :src="userStore.userInfo?.avatar || defaultAvatar" class="profile-avatar" />
+              <el-avatar :size="120" :src="formData.avatar || defaultAvatar" class="profile-avatar" />
               <h3 class="profile-name">{{ displayName }}</h3>
-              <p class="profile-username">@{{ userStore.userInfo?.username }}</p>
+              <p class="profile-username">@{{ formData.username }}</p>
             </div>
 
             <el-divider />
@@ -51,25 +51,25 @@
               <el-row :gutter="24">
                 <el-col :span="12">
                   <el-form-item label="用户名">
-                    <el-input v-model="userStore.userInfo?.username" disabled />
+                    <el-input :value="formData.username" disabled />
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
                   <el-form-item label="昵称">
-                    <el-input v-model="userStore.userInfo?.nickname" disabled />
+                    <el-input :value="formData.nickname" disabled />
                   </el-form-item>
                 </el-col>
               </el-row>
               <el-row :gutter="24">
                 <el-col :span="12">
                   <el-form-item label="电子邮箱">
-                    <el-input v-model="userStore.userInfo?.email" disabled />
+                    <el-input :value="formData.email" disabled />
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
                   <el-form-item label="账号状态">
-                    <el-tag :type="userStore.userInfo?.status === 1 ? 'success' : 'danger'">
-                      {{ userStore.userInfo?.status === 1 ? '正常' : '禁用' }}
+                    <el-tag :type="formData.status === 1 ? 'success' : 'danger'">
+                      {{ formData.status === 1 ? '正常' : '禁用' }}
                     </el-tag>
                   </el-form-item>
                 </el-col>
@@ -77,12 +77,12 @@
               <el-row :gutter="24">
                 <el-col :span="12">
                   <el-form-item label="注册时间">
-                    <el-input :value="formatDate(userStore.userInfo?.createTime)" disabled />
+                    <el-input :value="formatDate(formData.createTime)" disabled />
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
                   <el-form-item label="更新时间">
-                    <el-input :value="formatDate(userStore.userInfo?.updateTime)" disabled />
+                    <el-input :value="formatDate(formData.updateTime)" disabled />
                   </el-form-item>
                 </el-col>
               </el-row>
@@ -95,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 
@@ -105,9 +105,31 @@ const userStore = useUserStore()
 const loading = ref(false)
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
 
-const displayName = computed(() => {
-  return userStore.userInfo?.nickname || userStore.userInfo?.username || '用户'
+const formData = reactive({
+  username: '',
+  nickname: '',
+  email: '',
+  avatar: '',
+  status: 0,
+  createTime: '',
+  updateTime: ''
 })
+
+const displayName = computed(() => {
+  return formData.nickname || formData.username || '用户'
+})
+
+const syncFormFromStore = () => {
+  if (userStore.userInfo) {
+    formData.username = userStore.userInfo.username
+    formData.nickname = userStore.userInfo.nickname
+    formData.email = userStore.userInfo.email
+    formData.avatar = userStore.userInfo.avatar
+    formData.status = userStore.userInfo.status
+    formData.createTime = userStore.userInfo.createTime
+    formData.updateTime = userStore.userInfo.updateTime
+  }
+}
 
 const formatDate = (dateStr?: string) => {
   if (!dateStr) return '-'
@@ -139,6 +161,7 @@ const loadUserInfo = async () => {
     if (!userStore.userInfo) {
       await userStore.fetchUserInfo()
     }
+    syncFormFromStore()
   } finally {
     loading.value = false
   }
