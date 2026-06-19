@@ -363,3 +363,358 @@ cd frontend && npm run dev
 2. **shell 特殊字符转义**：`docker-compose.yml` 中涉及 URL 参数时，避免使用 `&`，或用引号包裹整个 URL。
 3. **JWT 过滤器白名单**：对于登录、健康检查等公开路径，应在自定义过滤器最开头直接放行，避免后续逻辑误拦截。
 4. **合理超时配置**：反向代理（Nginx/Vite）和健康检查都应设置合理的超时时间，覆盖 Spring Boot 冷启动耗时（通常 20-40 秒）。
+
+---
+
+# 后端循环依赖阻塞容器启动修复指南
+
+## 问题描述
+
+后端 Spring Boot 容器启动失败，抛出 `BeanCurrentlyInCreationException` 或 `UnsatisfiedDependencyException`（循环依赖异常），Docker 将其标记为 unhealthy，前端容器因 `depends_on: backend: condition: service_healthy` 永远等待，导致整个系统无法启动。
+
+典型错误日志：
+```
+org.springframework.beans.factory.BeanCurrentlyInCreationException:
+  Error creating bean with name 'securityConfig':
+    Requested bean is currently in creation: Is there an unresolvable circular reference?
+```
+
+---
+
+## 根因分析
+
+### 循环依赖链（创建顺序）
+
+```
+① Spring 容器启动，开始扫描并创建 @Configuration 类
+
+② 创建 SecurityConfig (@Configuration)
+   ├─ 发现 @Autowired JwtAuthenticationFilter 字段（字段注入）
+   │    → Spring 必须先创建 JwtAuthenticationFilter
+   │
+   └─ 发现类内部声明的 @Bean PasswordEncoder
+        → 但 @Bean 方法要等 SecurityConfig 实例化后才会执行
+
+③ 创建 JwtAuthenticationFilter (@Component)
+   └─ @Autowired UserService
+        → Spring 必须先创建 UserService
+
+④ 创建 UserServiceImpl (@Service，实现 UserService)
+   └─ @Autowired PasswordEncoder
+        → Spring 必须先找到 PasswordEncoder Bean
+
+⑤ 找 PasswordEncoder Bean
+   └→ 定义在 SecurityConfig 内部的 @Bean
+        → 但 SecurityConfig 还在第 ② 步，实例尚未完成
+           → 回到第 ② 步，形成死锁！
+
+⑥ Spring 抛出循环依赖异常，容器启动失败
+```
+
+### 三个设计缺陷共同导致循环
+
+| # | 位置 | 缺陷 |
+|---|------|------|
+| 1 | `SecurityConfig` | **字段注入** `JwtAuthenticationFilter`，而不是 @Bean 方法参数注入 |
+| 2 | `SecurityConfig` | 将 `PasswordEncoder` / `AuthenticationManager` 的 @Bean 声明在同一个配置类里 |
+| 3 | `JwtAuthenticationFilter` / `UserServiceImpl` | 大量使用 **立即依赖**（字段 @Autowired 无 @Lazy），即使只是运行期才用到的依赖 |
+
+---
+
+## 修复方案
+
+采用 **三层解耦** 组合方案，彻底打破循环：
+
+### 方案一：拆分配置类（结构性重构，消除主循环）
+
+#### 新建 SecurityBeanConfig.java
+
+将 `PasswordEncoder` 和 `AuthenticationManager` 从 `SecurityConfig` 拆分到独立的配置类：
+
+```java
+// config/SecurityBeanConfig.java （新建）
+@Configuration
+public class SecurityBeanConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(
+            AuthenticationConfiguration authenticationConfiguration) throws Exception {
+        return authenticationConfiguration.getAuthenticationManager();
+    }
+}
+```
+
+#### 重构 SecurityConfig.java
+
+- 移除 `@Autowired JwtAuthenticationFilter` 字段注入
+- 改为在 `filterChain()` 方法**参数列表**中注入（Spring 延迟解析依赖）
+- 移除已拆分的两个 @Bean 声明
+
+```java
+// config/SecurityConfig.java （重构后）
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(
+            HttpSecurity http,
+            JwtAuthenticationFilter jwtAuthenticationFilter) throws Exception {
+        // ... 过滤器注册逻辑
+        return http.build();
+    }
+}
+```
+
+> **原理**：@Bean 方法参数依赖由 Spring 在真正调用方法时才解析，而不是配置类实例化阶段。这切断了 `SecurityConfig → JwtAuthenticationFilter` 的硬依赖。
+
+### 方案二：关键路径使用 @Lazy 延迟初始化（保险层）
+
+对仍可能产生循环的运行期依赖，使用 `@Lazy` 注解：
+
+#### JwtAuthenticationFilter.java
+
+```java
+// security/JwtAuthenticationFilter.java
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private JwtUtils jwtUtils;
+
+    @Autowired
+    @Lazy                  // ← 新增：首次实际调用时才创建代理对象
+    private UserService userService;
+    // ...
+}
+```
+
+#### UserServiceImpl.java
+
+```java
+// service/impl/UserServiceImpl.java
+@Service
+public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
+
+    @Autowired
+    @Lazy                  // ← 新增
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    @Lazy                  // ← 新增
+    private JwtUtils jwtUtils;
+    // ...
+}
+```
+
+> **原理**：@Lazy 会生成一个代理对象注入，第一次实际方法调用时才触发目标 Bean 的初始化。完美适用于"只有请求进来才会用到"的运行期依赖。
+
+### 方案三：优化 Docker Compose 启动容错（运维层）
+
+```yaml
+# docker-compose.yml
+services:
+  db:
+    restart: unless-stopped              # 异常自动重启
+    healthcheck:
+      retries: 10                        # MySQL 启动慢，增加重试
+
+  backend:
+    restart: unless-stopped              # 异常自动重启
+    healthcheck:
+      retries: 12                        # Spring 冷启动慢，增加重试
+      start_period: 60s                  # 延长启动宽限期
+
+  frontend:
+    restart: unless-stopped              # 异常自动重启
+```
+
+---
+
+## 修复后的依赖图（无环）
+
+```
+┌───────────────────────────────┐
+│  SecurityBeanConfig           │ 独立存在，只产出 Bean
+│  └─ PasswordEncoder @Bean     │ 不依赖其他组件
+│  └─ AuthenticationManager     │
+└──────────────┬────────────────┘
+               │产出
+               ▼
+┌───────────────────────────────┐      ┌──────────────────────────┐
+│  UserServiceImpl              │──@Lazy→│  JwtUtils               │
+│  └─ @Lazy PasswordEncoder     │      │  （纯工具类，无依赖）     │
+└──────┬────────────────────────┘      └──────────────────────────┘
+       │@Lazy（反向代理，非强依赖）
+       ▼
+┌───────────────────────────────┐
+│  JwtAuthenticationFilter      │
+│  └─ JwtUtils                  │
+│  └─ @Lazy UserService         │← 首次请求才初始化，不参与启动链
+└──────┬────────────────────────┘
+       │方法参数注入（@Bean 调用时才解析）
+       ▼
+┌───────────────────────────────┐
+│  SecurityConfig               │ 最轻量，只组装 Filter 链
+│  └─ filterChain(@Bean 方法)   │
+└───────────────────────────────┘
+```
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/src/main/java/com/example/usermanager/config/SecurityBeanConfig.java` | **新增文件**，拆分 PasswordEncoder 和 AuthenticationManager 的 @Bean 声明 |
+| `backend/src/main/java/com/example/usermanager/config/SecurityConfig.java` | 移除字段注入和两个 @Bean，改用 filterChain 方法参数注入 JwtAuthenticationFilter |
+| `backend/src/main/java/com/example/usermanager/security/JwtAuthenticationFilter.java` | UserService 字段添加 `@Lazy` |
+| `backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java` | PasswordEncoder 和 JwtUtils 字段添加 `@Lazy` |
+| `docker-compose.yml` | 三服务添加 `restart: unless-stopped`，db/backend healthcheck 的 retries 和 start_period 放宽 |
+
+---
+
+## 验证方法
+
+### 一、后端独立启动验证（无前端容器干扰）
+
+```bash
+cd backend
+
+# 1. 编译检查（Maven）
+mvn clean compile -q
+# 预期：BUILD SUCCESS，无循环依赖异常
+
+# 2. 启动后端（需本地 MySQL 运行在 12753）
+mvn spring-boot:run
+
+# 3. 观察启动日志
+# 预期：
+#   - 无 BeanCurrentlyInCreationException
+#   - 无 UnsatisfiedDependencyException
+#   - 最终出现 "Started UserManagerApplication in X.XXX seconds"
+
+# 4. 测试健康检查
+curl http://localhost:8080/api/health
+# 预期：{"code":200,...,"status":"UP"}
+
+# 5. 测试登录
+curl -X POST http://localhost:8080/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
+# 预期：code=200，返回 token
+```
+
+### 二、Docker 全链路启动验证
+
+```bash
+# 1. 清理旧容器和镜像（可选）
+docker-compose down -v
+
+# 2. 重新构建并启动
+docker-compose up -d --build
+
+# 3. 实时观察启动过程（关键！）
+docker-compose logs -f backend
+# 预期：
+#   30-60 秒内出现 "Started UserManagerApplication"
+#   无循环依赖异常栈
+
+# 4. 检查容器健康状态（持续观察 2 分钟）
+watch -n 5 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+# 预期（按时间顺序）：
+#   T+30s  db: healthy
+#   T+60s  backend: healthy
+#   T+70s  frontend: Up
+
+# 5. 前端可访问性测试
+curl -s -o /dev/null -w "%{http_code}" http://localhost:32753/
+# 预期：200
+
+# 6. 端到端登录测试（前端 → Nginx → 后端）
+curl -X POST http://localhost:32753/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
+# 预期：code=200，返回 token（不是 502）
+```
+
+### 三、边界条件与故障恢复测试
+
+| 测试场景 | 操作步骤 | 预期结果 |
+|----------|----------|----------|
+| 后端启动慢 | 故意限制 CPU 或第一次冷启动 | 前端容器不会报"依赖超时"，backend 通过重启策略和更长的 start_period 成功启动 |
+| 后端运行时崩溃 | `docker kill user-manager-backend` | `restart: unless-stopped` 自动重启；重启期间前端返回 502，但恢复后自动正常（无手动干预） |
+| MySQL 重启 | `docker-compose restart db` | backend healthcheck 短暂失败，DB 恢复后 backend 自动重新连接，无需重启 backend 容器 |
+| 循环依赖回归 | 尝试在 SecurityConfig 中重新添加字段注入 Filter | 编译 / 启动阶段立即报错（可通过 mvn test 提前发现） |
+
+---
+
+## 问题预防建议（Spring 循环依赖最佳实践）
+
+### 1. @Configuration 类：方法参数注入 > 字段注入
+
+❌ **错误**：字段注入会强制前置依赖
+```java
+@Configuration
+public class SecurityConfig {
+    @Autowired
+    private JwtAuthenticationFilter filter;  // 配置类还没创建就需要 Filter！
+}
+```
+
+✅ **正确**：方法参数由 Spring 在调用 @Bean 时才解析
+```java
+@Bean
+public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter filter) {
+    // ...
+}
+```
+
+### 2. @Bean 与依赖它的 @Component：拆到不同 @Configuration
+
+同一个配置类里既声明 Bean 又依赖其他 Bean，是循环依赖的重灾区。遵循**单一职责**：
+- `*BeanConfig` / `*Config`：只声明 @Bean（工具类、编码器、管理器等）
+- `*ChainConfig` / `*WebConfig`：只做装配和串联
+
+### 3. 运行期依赖一律加 @Lazy
+
+以下场景的依赖，启动时根本用不到，加 `@Lazy` 零副作用：
+- `@Service` 中的 `JwtUtils`、`PasswordEncoder`、`RedisTemplate`（只有登录/请求时才用）
+- `@Filter` 中的 `UserService`、权限校验服务（只有请求进来才用）
+- `@RestControllerAdvice` 中的邮件/告警服务（只有异常时才用）
+
+### 4. 优先使用构造器注入（配合 @Lazy）
+
+构造器注入能让依赖关系更清晰，配合 @Lazy 可在构造时标记：
+
+```java
+@Service
+public class UserServiceImpl {
+    private final PasswordEncoder passwordEncoder;
+
+    public UserServiceImpl(@Lazy PasswordEncoder passwordEncoder) {
+        this.passwordEncoder = passwordEncoder;
+    }
+}
+```
+
+### 5. CI 中加入循环依赖检测
+
+在 `pom.xml` 中加 Maven Enforcer 规则，或在启动脚本后 `grep` 关键异常词，提前拦截。
+
+---
+
+## 总结：三层解耦方法论
+
+| 层次 | 手段 | 适用场景 | 解决的问题 |
+|------|------|----------|------------|
+| 结构层 | 拆分 @Configuration，方法参数注入 | 配置类之间的循环 | 消除启动阶段的硬依赖 |
+| 注入层 | @Lazy 延迟初始化 | 运行期才使用的依赖 | 避免创建顺序死锁 |
+| 运维层 | restart 策略 + 健康检查容错 | 外部依赖慢启动 | 非代码问题的自愈 |
+
+三层组合使用后，Spring Boot 启动链从「多米诺骨牌」变成「独立单元」，任一组件初始化问题不会阻塞整个系统。

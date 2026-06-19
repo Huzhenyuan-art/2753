@@ -2,6 +2,7 @@ services:
   db:
     image: mysql:8.0
     container_name: user-manager-db
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: user_management
@@ -15,12 +16,13 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 60s
 
   backend:
     build: ./backend
     container_name: user-manager-backend
+    restart: unless-stopped
     ports:
       - "22753:8080"
     depends_on:
@@ -32,12 +34,13 @@ services:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 40s
+      retries: 12
+      start_period: 60s
 
   frontend:
     build: ./frontend
     container_name: user-manager-frontend
+    restart: unless-stopped
     ports:
       - "32753:80"
     depends_on:

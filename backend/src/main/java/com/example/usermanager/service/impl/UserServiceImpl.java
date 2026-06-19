@@ -7,6 +7,7 @@ import com.example.usermanager.mapper.UserMapper;
 import com.example.usermanager.service.UserService;
 import com.example.usermanager.util.JwtUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -14,9 +15,11 @@ import org.springframework.stereotype.Service;
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
 
     @Autowired
+    @Lazy
     private PasswordEncoder passwordEncoder;
 
     @Autowired
+    @Lazy
     private JwtUtils jwtUtils;
 
     @Override
