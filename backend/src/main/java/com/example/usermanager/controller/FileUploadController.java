@@ -36,8 +36,8 @@ public class FileUploadController {
             return Result.error(400, "仅支持上传图片文件");
         }
 
-        if (file.getSize() > 5 * 1024 * 1024) {
-            return Result.error(400, "图片大小不能超过5MB");
+        if (file.getSize() > 20 * 1024 * 1024) {
+            return Result.error(413, "图片大小不能超过20MB，请压缩后重试");
         }
 
         try {

@@ -718,3 +718,370 @@ public class UserServiceImpl {
 | 运维层 | restart 策略 + 健康检查容错 | 外部依赖慢启动 | 非代码问题的自愈 |
 
 三层组合使用后，Spring Boot 启动链从「多米诺骨牌」变成「独立单元」，任一组件初始化问题不会阻塞整个系统。
+
+---
+
+# 头像上传 413 Request Entity Too Large 修复指南
+
+## 问题描述
+
+用户在系统中上传头像图片并点击确认按钮时，系统出现错误提示："Request failed with status code 413"。HTTP 413 状态码表示"请求实体过大"（Request Entity Too Large），意味着请求体超出了服务器允许的最大大小。
+
+---
+
+## 根因分析
+
+413 错误可能发生在请求链路的多个层级，需要逐层排查。本次问题存在 **三层瓶颈**：
+
+### 根因一：Nginx 未配置 `client_max_body_size`（最关键）
+
+**这是导致 413 的直接原因。**
+
+Nginx 默认 `client_max_body_size` 为 **1MB**，任何超过 1MB 的上传请求在到达后端之前就被 Nginx 拦截并直接返回 413。
+
+原始 `frontend/nginx.conf`：
+```nginx
+server {
+    listen 80;
+    server_name localhost;
+    # ❌ 缺少 client_max_body_size 配置，默认仅 1MB
+
+    location /api/ {
+        proxy_pass http://backend:8080/api/;
+        # ...
+    }
+}
+```
+
+**影响**：所有超过 1MB 的头像图片上传请求都无法到达后端，Nginx 直接返回 413。手机拍摄的照片通常 3-10MB，完全无法上传。
+
+### 根因二：Spring Boot Tomcat 层缺少请求体大小配置
+
+Spring Boot 3.x 内嵌 Tomcat 有两个默认限制：
+- `server.tomcat.max-http-form-post-size`：默认 **2MB**，限制 POST 请求体大小
+- `server.tomcat.max-swallow-size`：默认 **2MB**，限制 Tomcat 可吞入的请求体大小
+
+即使 Spring MVC 的 multipart 配置允许更大的文件，Tomcat 自身的限制仍可能拦截请求。
+
+原始 `application.yml` 中 multipart 配置：
+```yaml
+spring:
+  servlet:
+    multipart:
+      max-file-size: 5MB       # 单个文件限制
+      max-request-size: 10MB    # 总请求限制
+# ❌ 缺少 server.tomcat.max-swallow-size 配置
+# ❌ 缺少 server.tomcat.max-http-form-post-size 配置
+```
+
+### 根因三：后端缺少 `MaxUploadSizeExceededException` 专门处理
+
+当文件大小超出 Spring 的 multipart 限制时，Spring 抛出 `MaxUploadSizeExceededException`，但原始 `GlobalExceptionHandler` 只有一个通用的 `Exception` 处理器，返回的错误信息对用户不友好。
+
+### 根因四：前端错误提示不友好
+
+原始 `request.ts` 错误拦截器：
+```typescript
+error => {
+    ElMessage.error(error.message || '网络错误')  // ❌ 显示英文 "Request failed with status code 413"
+}
+```
+
+用户看到的是英文技术性错误信息，无法理解发生了什么以及如何解决。
+
+---
+
+## 修复方案
+
+### 步骤一：Nginx 添加 `client_max_body_size` 并补全 `/uploads/` 代理
+
+修改 `frontend/nginx.conf`：
+
+```nginx
+server {
+    listen 80;
+    server_name localhost;
+
+    client_max_body_size 20m;  # ✅ 允许最大 20MB 请求体
+
+    location /api/ {
+        proxy_pass http://backend:8080/api/;
+        # ...超时配置不变
+    }
+
+    location /uploads/ {       # ✅ 新增：头像文件访问代理
+        proxy_pass http://backend:8080/uploads/;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**关键要点**：
+- `client_max_body_size 20m` 放在 `server` 块级别，对全局生效
+- 新增 `/uploads/` 代理，确保 Docker 部署时头像图片可通过 Nginx 访问
+- 设置为 20MB 是因为手机拍摄的高清照片通常在 5-15MB 范围
+
+### 步骤二：Spring Boot 增加 Tomcat 限制和 multipart 上限
+
+修改 `backend/src/main/resources/application.yml`：
+
+```yaml
+server:
+  port: 8080
+  tomcat:
+    max-swallow-size: -1           # ✅ 不限制 Tomcat 吞入大小（-1 = 无限制）
+    max-http-form-post-size: -1    # ✅ 不限制 Tomcat POST 请求体大小
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 20MB          # ✅ 单个文件从 5MB 提升到 20MB
+      max-request-size: 30MB       # ✅ 总请求从 10MB 提升到 30MB
+```
+
+**关键要点**：
+- `max-swallow-size: -1` 确保 Tomcat 不会提前截断大请求体
+- `max-http-form-post-size: -1` 确保 Tomcat 不会拒绝大 POST 请求
+- multipart 限制设为 20MB/30MB，与 Nginx 的 20MB 保持协调
+- 业务层 `FileUploadController` 保留 20MB 的校验作为最后一道防线
+
+### 步骤三：后端增加 `MaxUploadSizeExceededException` 中文异常处理
+
+修改 `backend/src/main/java/com/example/usermanager/exception/GlobalExceptionHandler.java`：
+
+```java
+@ExceptionHandler(MaxUploadSizeExceededException.class)
+public Result<String> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
+    log.warn("文件大小超出限制: {}", e.getMessage());
+    return Result.error(413, "上传的文件大小超出限制，请选择小于20MB的图片");
+}
+```
+
+**注意**：此处理器必须在 `Exception.class` 通用处理器之前声明，因为 Spring 按**从具体到通用**的顺序匹配异常处理器。
+
+同步修改 `FileUploadController` 中的业务校验错误码和提示：
+
+```java
+if (file.getSize() > 20 * 1024 * 1024) {
+    return Result.error(413, "图片大小不能超过20MB，请压缩后重试");
+}
+```
+
+### 步骤四：前端优化错误提示和上传超时
+
+#### 4.1 request.ts — 按状态码分类的中文错误提示
+
+```typescript
+error => {
+    if (error.response) {
+        const status = error.response.status
+        if (status === 413) {
+            ElMessage.error('上传的文件大小超出服务器限制，请选择小于20MB的图片后重试')
+        } else if (status === 401 || status === 403) {
+            ElMessage.error('登录已过期，请重新登录')
+            localStorage.removeItem('token')
+            router.push('/login')
+        } else if (status === 404) {
+            ElMessage.error('请求的资源不存在')
+        } else if (status === 500) {
+            ElMessage.error('服务器内部错误，请稍后重试')
+        } else if (status === 502 || status === 503) {
+            ElMessage.error('服务暂时不可用，请稍后重试')
+        } else {
+            ElMessage.error(error.response.data?.message || '请求失败，请稍后重试')
+        }
+    } else if (error.code === 'ECONNABORTED') {
+        ElMessage.error('请求超时，请检查网络后重试')
+    } else {
+        ElMessage.error('网络连接异常，请检查网络设置')
+    }
+    return Promise.reject(error)
+}
+```
+
+#### 4.2 Home.vue / Profile.vue — 前端文件大小校验与提示
+
+```typescript
+const handleAvatarChange = (uploadFile: any) => {
+    const raw = uploadFile.raw
+    if (!raw.type.startsWith('image/')) {
+        ElMessage.error('仅支持上传图片文件（如 JPG、PNG、GIF 等）')
+        return
+    }
+    if (raw.size > 20 * 1024 * 1024) {
+        ElMessage.error('图片大小不能超过20MB，请压缩后重试')
+        return
+    }
+    // ...设置预览和文件引用
+}
+```
+
+#### 4.3 上传请求超时调整
+
+```typescript
+const res = await request.post('/file/avatar', fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,  // ✅ 大文件上传需要更长超时（从 30s 提升到 60s）
+})
+```
+
+---
+
+## 修复后的请求链路大小限制一览
+
+| 层级 | 配置项 | 修复前 | 修复后 | 说明 |
+|------|--------|--------|--------|------|
+| **Nginx** | `client_max_body_size` | 1MB（默认） | **20MB** | 最关键的修复点 |
+| **Tomcat** | `max-swallow-size` | 2MB（默认） | **-1（无限制）** | 防止 Tomcat 截断请求体 |
+| **Tomcat** | `max-http-form-post-size` | 2MB（默认） | **-1（无限制）** | 防止 Tomcat 拒绝大 POST |
+| **Spring MVC** | `max-file-size` | 5MB | **20MB** | 单文件限制 |
+| **Spring MVC** | `max-request-size` | 10MB | **30MB** | 整个请求体限制 |
+| **业务层** | FileUploadController 校验 | 5MB | **20MB** | 最后一道防线 |
+| **前端** | el-upload 前置校验 | 5MB | **20MB** | 用户即时反馈 |
+| **前端** | 上传请求超时 | 30s | **60s** | 适应大文件慢网络 |
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `frontend/nginx.conf` | 添加 `client_max_body_size 20m`；新增 `/uploads/` location 代理头像文件 |
+| `backend/src/main/resources/application.yml` | 添加 Tomcat `max-swallow-size: -1` 和 `max-http-form-post-size: -1`；multipart 限制提升至 20MB/30MB |
+| `backend/src/main/java/com/example/usermanager/exception/GlobalExceptionHandler.java` | 新增 `MaxUploadSizeExceededException` 处理器，返回 413 和中文提示 |
+| `backend/src/main/java/com/example/usermanager/controller/FileUploadController.java` | 业务校验限制从 5MB 调至 20MB，错误码改为 413，提示中文优化 |
+| `frontend/src/utils/request.ts` | 响应拦截器按 HTTP 状态码分类处理，413 返回中文提示 |
+| `frontend/src/views/Home.vue` | 前端文件大小校验从 5MB 调至 20MB；错误提示中文化；上传超时调至 60s |
+| `frontend/src/views/Profile.vue` | 前端文件大小校验从 5MB 调至 20MB；错误提示中文化；上传超时调至 60s |
+
+---
+
+## 验证方法
+
+### 一、小图片上传（< 1MB）
+
+```
+操作：选择一张小尺寸头像（如 200KB 的缩略图）
+预期：上传成功，头像即时更新显示
+```
+
+### 二、中等图片上传（1-5MB）
+
+```
+操作：选择一张手机拍摄的标准照片（如 3MB）
+预期：上传成功（此前会触发 413，修复后正常）
+```
+
+### 三、大图片上传（5-15MB）
+
+```
+操作：选择一张高清照片（如 10MB）
+预期：上传成功，不超时、不报错
+```
+
+### 四、超大图片上传（> 20MB）
+
+```
+操作：选择一张超大高清照片（如 30MB）
+预期：前端即时提示"图片大小不能超过20MB，请压缩后重试"，不发起请求
+```
+
+### 五、非图片文件上传
+
+```
+操作：选择一个 .pdf 或 .docx 文件
+预期：前端即时提示"仅支持上传图片文件（如 JPG、PNG、GIF 等）"
+```
+
+### 六、Docker 环境全链路验证
+
+```bash
+# 1. 重新构建
+docker-compose up -d --build
+
+# 2. 测试上传（需先获取 token）
+TOKEN=$(curl -s -X POST http://localhost:32753/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data'])")
+
+# 3. 上传测试文件（创建一个 5MB 测试图片）
+dd if=/dev/urandom bs=1M count=5 of=/tmp/test_avatar.jpg 2>/dev/null
+
+# 4. 发送上传请求
+curl -X POST http://localhost:32753/api/file/avatar \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@/tmp/test_avatar.jpg" \
+  -w "\nHTTP Status: %{http_code}\n"
+# 预期：HTTP Status: 200，返回头像 URL
+
+# 5. 验证头像可访问
+curl -s -o /dev/null -w "%{http_code}" http://localhost:32753/uploads/avatars/xxx.jpg
+# 预期：200
+```
+
+### 七、浏览器兼容性验证
+
+| 浏览器 | 测试项 | 预期 |
+|--------|--------|------|
+| Chrome 最新版 | 上传 5MB 图片 | 成功 |
+| Firefox 最新版 | 上传 5MB 图片 | 成功 |
+| Safari 最新版 | 上传 5MB 图片 | 成功 |
+| Edge 最新版 | 上传 5MB 图片 | 成功 |
+| 移动端 Chrome | 拍照上传 | 成功 |
+
+---
+
+## 问题预防建议
+
+### 1. 新增文件上传功能时的检查清单
+
+| 检查项 | 位置 | 需要配置的值 |
+|--------|------|-------------|
+| Nginx 请求体限制 | `nginx.conf` → `client_max_body_size` | ≥ 业务需要的最大文件大小 |
+| Tomcat 吞入限制 | `application.yml` → `server.tomcat.max-swallow-size` | -1（无限制）或 ≥ multipart 上限 |
+| Tomcat POST 限制 | `application.yml` → `server.tomcat.max-http-form-post-size` | -1（无限制）或 ≥ multipart 上限 |
+| Spring multipart 单文件 | `application.yml` → `spring.servlet.multipart.max-file-size` | 业务需要的最大单文件大小 |
+| Spring multipart 总请求 | `application.yml` → `spring.servlet.multipart.max-request-size` | ≥ max-file-size × 可能同时上传的文件数 |
+| 业务层校验 | Controller 中 `file.getSize()` 检查 | 与 multipart 上限一致 |
+| 前端前置校验 | `el-upload` 的 `on-change` 中检查 `file.size` | 与后端保持一致 |
+| 上传超时 | axios 请求的 `timeout` | ≥ 大文件在慢网络下的传输时间 |
+
+### 2. 大小限制的层级关系
+
+```
+前端校验（最先拦截，体验最好）
+    ≤ Nginx client_max_body_size（第二道防线）
+        ≤ Tomcat max-http-form-post-size
+            ≤ Spring multipart max-request-size
+                ≤ Spring multipart max-file-size
+                    ≤ 业务层 file.getSize() 校验（最后一道防线）
+```
+
+**原则**：外层限制 ≥ 内层限制，避免请求被外层拒绝但内层允许的矛盾情况。
+
+### 3. 错误信息用户友好原则
+
+- **前端即时校验**：在文件选择后立即检查大小和类型，给出明确的中文提示
+- **Nginx/容器层拦截**：通过前端拦截器统一转换为中文提示，不要让用户看到英文 HTTP 状态码
+- **业务层校验**：返回包含具体限制值的中文提示，如"请选择小于20MB的图片"
+- **异常处理器**：对 `MaxUploadSizeExceededException` 等框架异常做专门处理，不要让技术细节暴露给用户
+
+### 4. Nginx 配置模板
+
+任何涉及文件上传的 Nginx 配置，都应包含以下最小配置：
+
+```nginx
+server {
+    client_max_body_size 20m;  # 必须显式设置，默认 1MB 远不够
+
+    location /api/ {
+        proxy_pass http://backend:8080;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
+```

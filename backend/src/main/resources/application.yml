@@ -1,13 +1,16 @@
 server:
   port: 8080
+  tomcat:
+    max-swallow-size: -1
+    max-http-form-post-size: -1
 
 spring:
   application:
     name: user-manager
   servlet:
     multipart:
-      max-file-size: 5MB
-      max-request-size: 10MB
+      max-file-size: 20MB
+      max-request-size: 30MB
   datasource:
     url: jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: root

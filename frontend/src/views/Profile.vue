@@ -160,11 +160,11 @@ const syncFormFromStore = () => {
 const handleAvatarChange = async (uploadFile: any) => {
   const raw = uploadFile.raw
   if (!raw.type.startsWith('image/')) {
-    ElMessage.error('仅支持上传图片文件')
+    ElMessage.error('仅支持上传图片文件（如 JPG、PNG、GIF 等）')
     return
   }
-  if (raw.size > 5 * 1024 * 1024) {
-    ElMessage.error('图片大小不能超过5MB')
+  if (raw.size > 20 * 1024 * 1024) {
+    ElMessage.error('图片大小不能超过20MB，请压缩后重试')
     return
   }
 
@@ -174,7 +174,7 @@ const handleAvatarChange = async (uploadFile: any) => {
     fd.append('file', raw)
     const res: any = await request.post('/file/avatar', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 30000,
+      timeout: 60000,
     })
     const newAvatarUrl = res.data
     formData.avatar = newAvatarUrl
@@ -182,7 +182,7 @@ const handleAvatarChange = async (uploadFile: any) => {
     userStore.setUserInfo({ avatar: newAvatarUrl })
     ElMessage.success('头像更新成功')
   } catch {
-    ElMessage.error('头像上传失败')
+    ElMessage.error('头像上传失败，请稍后重试')
   } finally {
     avatarUploading.value = false
   }

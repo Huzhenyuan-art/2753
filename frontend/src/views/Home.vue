@@ -305,11 +305,11 @@ const handleEdit = (row: any) => {
 const handleAvatarChange = (uploadFile: any) => {
   const raw = uploadFile.raw
   if (!raw.type.startsWith('image/')) {
-    ElMessage.error('仅支持上传图片文件')
+    ElMessage.error('仅支持上传图片文件（如 JPG、PNG、GIF 等）')
     return
   }
-  if (raw.size > 5 * 1024 * 1024) {
-    ElMessage.error('图片大小不能超过5MB')
+  if (raw.size > 20 * 1024 * 1024) {
+    ElMessage.error('图片大小不能超过20MB，请压缩后重试')
     return
   }
   avatarFile.value = raw
@@ -325,7 +325,7 @@ const submitForm = async () => {
       formData.append('file', avatarFile.value)
       const uploadRes: any = await request.post('/file/avatar', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 30000,
+        timeout: 60000,
       })
       userForm.value.avatar = uploadRes.data
     }
