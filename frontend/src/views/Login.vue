@@ -26,7 +26,7 @@
             </el-input>
           </el-form-item>
           <div class="options">
-            <el-checkbox v-model="rememberMe">记住密码</el-checkbox>
+            <el-checkbox v-model="rememberMe">记住用户名</el-checkbox>
           </div>
           <el-button type="primary" :loading="loading" class="login-btn" size="large" @click="handleLogin">
             登 录
@@ -58,11 +58,9 @@ const rules = {
 }
 
 onMounted(() => {
-  const saved = localStorage.getItem('saved_login')
-  if (saved) {
-    const { username, password } = JSON.parse(saved)
-    loginForm.value.username = username
-    loginForm.value.password = password
+  const savedUsername = localStorage.getItem('saved_username')
+  if (savedUsername) {
+    loginForm.value.username = savedUsername
     rememberMe.value = true
   }
 })
@@ -75,10 +73,11 @@ const handleLogin = async () => {
     userStore.setToken(res.data)
     await userStore.fetchUserInfo()
     if (rememberMe.value) {
-      localStorage.setItem('saved_login', JSON.stringify(loginForm.value))
+      localStorage.setItem('saved_username', loginForm.value.username)
     } else {
-      localStorage.removeItem('saved_login')
+      localStorage.removeItem('saved_username')
     }
+    localStorage.removeItem('saved_login')
     ElMessage.success('登录成功')
     router.push('/')
   } catch (error) {
