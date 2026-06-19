@@ -11,13 +11,16 @@
         <div class="header-right">
           <el-dropdown trigger="click">
             <div class="user-profile">
-              <el-avatar :size="32" src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png" />
-              <span class="username">管理员</span>
+              <el-avatar :size="32" :src="userStore.userInfo?.avatar || defaultAvatar" />
+              <span class="username">{{ displayName }}</span>
               <el-icon><ArrowDown /></el-icon>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="handleLogout">
+                <el-dropdown-item @click="goProfile">
+                  <el-icon><User /></el-icon>个人中心
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon>退出登录
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -136,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
@@ -144,6 +147,12 @@ import { useUserStore } from '@/store/user'
 
 const router = useRouter()
 const userStore = useUserStore()
+
+const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
+
+const displayName = computed(() => {
+  return userStore.userInfo?.nickname || userStore.userInfo?.username || '用户'
+})
 
 const userList = ref([])
 const total = ref(0)
@@ -236,6 +245,10 @@ const confirmDelete = (row: any) => {
   })
 }
 
+const goProfile = () => {
+  router.push('/profile')
+}
+
 const handleLogout = () => {
   userStore.logout()
   router.push('/login')
@@ -246,7 +259,12 @@ const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-onMounted(fetchData)
+onMounted(() => {
+  fetchData()
+  if (!userStore.userInfo) {
+    userStore.fetchUserInfo()
+  }
+})
 </script>
 
 <style scoped>

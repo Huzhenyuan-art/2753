@@ -73,6 +73,7 @@ const handleLogin = async () => {
   try {
     const res: any = await request.post('/user/login', loginForm.value)
     userStore.setToken(res.data)
+    await userStore.fetchUserInfo()
     if (rememberMe.value) {
       localStorage.setItem('saved_login', JSON.stringify(loginForm.value))
     } else {

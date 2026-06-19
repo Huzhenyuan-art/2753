@@ -7,6 +7,7 @@ import com.example.usermanager.entity.User;
 import com.example.usermanager.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -81,5 +82,15 @@ public class UserController {
         }
         userService.removeById(id);
         return Result.success();
+    }
+
+    @GetMapping("/info")
+    public Result<User> getCurrentUserInfo() {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        User user = userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user != null) {
+            user.setPassword(null);
+        }
+        return Result.success(user);
     }
 }
