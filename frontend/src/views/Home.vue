@@ -11,7 +11,7 @@
         <div class="header-right">
           <el-dropdown trigger="click">
             <div class="user-profile">
-              <el-avatar :size="32" :src="userStore.userInfo?.avatar || defaultAvatar" />
+              <el-avatar :size="32" :src="resolveAvatarUrl(userStore.userInfo?.avatar)" />
               <span class="username">{{ displayName }}</span>
               <el-icon><ArrowDown /></el-icon>
             </div>
@@ -75,6 +75,11 @@
             class="custom-table"
             :header-cell-style="{ background: '#f8fafc', color: '#64748b', fontWeight: 'bold' }"
           >
+            <el-table-column label="头像" width="70" align="center">
+              <template #default="{ row }">
+                <el-avatar :size="36" :src="resolveAvatarUrl(row.avatar)" />
+              </template>
+            </el-table-column>
             <el-table-column prop="username" label="用户名" min-width="120">
               <template #default="{ row }">
                 <span class="user-identity">{{ row.username }}</span>
@@ -139,6 +144,24 @@
       class="custom-dialog"
     >
       <el-form :model="userForm" :rules="userRules" ref="userFormRef" label-position="top">
+        <el-form-item label="头像">
+          <div class="avatar-upload-area">
+            <el-upload
+              class="avatar-uploader"
+              action=""
+              :auto-upload="false"
+              :show-file-list="false"
+              :on-change="handleAvatarChange"
+              accept="image/*"
+            >
+              <el-avatar :size="64" :src="avatarPreview || resolveAvatarUrl(userForm.avatar)" class="avatar-preview" />
+              <div class="avatar-upload-overlay">
+                <el-icon :size="20"><Upload /></el-icon>
+              </div>
+            </el-upload>
+            <span class="avatar-upload-tip">点击更换头像</span>
+          </div>
+        </el-form-item>
         <el-form-item label="用户名" prop="username">
           <el-input v-model="userForm.username" :disabled="!!userForm.id" placeholder="登录使用的唯一账号" />
         </el-form-item>
@@ -172,6 +195,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 
@@ -179,6 +203,12 @@ const router = useRouter()
 const userStore = useUserStore()
 
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
+
+const resolveAvatarUrl = (avatar?: string) => {
+  if (!avatar) return defaultAvatar
+  if (avatar.startsWith('http')) return avatar
+  return avatar
+}
 
 const displayName = computed(() => {
   return userStore.userInfo?.nickname || userStore.userInfo?.username || userStore.jwtUsername || '用户'
@@ -202,8 +232,12 @@ const userForm = ref<any>({
   password: '',
   nickname: '',
   email: '',
+  avatar: '',
   status: 1
 })
+
+const avatarPreview = ref('')
+const avatarFile = ref<File | null>(null)
 
 const userRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -233,7 +267,9 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   dialogTitle.value = '新增用户档案'
-  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '', status: 1 }
+  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '', avatar: '', status: 1 }
+  avatarPreview.value = ''
+  avatarFile.value = null
   dialogVisible.value = true
 }
 
@@ -261,13 +297,38 @@ const confirmToggleStatus = (row: any) => {
 const handleEdit = (row: any) => {
   dialogTitle.value = '编辑用户档案'
   userForm.value = { ...row, password: '' }
+  avatarPreview.value = ''
+  avatarFile.value = null
   dialogVisible.value = true
+}
+
+const handleAvatarChange = (uploadFile: any) => {
+  const raw = uploadFile.raw
+  if (!raw.type.startsWith('image/')) {
+    ElMessage.error('仅支持上传图片文件')
+    return
+  }
+  if (raw.size > 5 * 1024 * 1024) {
+    ElMessage.error('图片大小不能超过5MB')
+    return
+  }
+  avatarFile.value = raw
+  avatarPreview.value = URL.createObjectURL(raw)
 }
 
 const submitForm = async () => {
   await userFormRef.value.validate()
   submitLoading.value = true
   try {
+    if (avatarFile.value) {
+      const formData = new FormData()
+      formData.append('file', avatarFile.value)
+      const uploadRes: any = await request.post('/file/avatar', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 30000,
+      })
+      userForm.value.avatar = uploadRes.data
+    }
     if (userForm.value.id) {
       await request.put('/user', userForm.value)
       ElMessage.success('档案更新成功')
@@ -497,5 +558,45 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 12px;
   padding-top: 10px;
+}
+
+.avatar-upload-area {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar-uploader {
+  position: relative;
+  cursor: pointer;
+}
+
+.avatar-preview {
+  border: 2px solid #e2e8f0;
+}
+
+.avatar-upload-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.avatar-uploader:hover .avatar-upload-overlay {
+  opacity: 1;
+}
+
+.avatar-upload-tip {
+  color: #94a3b8;
+  font-size: 0.85rem;
 }
 </style>

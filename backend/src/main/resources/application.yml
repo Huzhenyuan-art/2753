@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: user-manager
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
   datasource:
     url: jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: root
@@ -12,6 +16,9 @@ spring:
   sql:
     init:
       mode: never
+
+file:
+  upload-dir: ./uploads/avatars
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml

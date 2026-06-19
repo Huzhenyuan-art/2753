@@ -11,7 +11,7 @@
         <div class="header-right">
           <el-dropdown trigger="click">
             <div class="user-profile">
-              <el-avatar :size="32" :src="userStore.userInfo?.avatar || defaultAvatar" />
+              <el-avatar :size="32" :src="resolveAvatarUrl(userStore.userInfo?.avatar)" />
               <span class="username">{{ displayName }}</span>
               <el-icon><ArrowDown /></el-icon>
             </div>
@@ -40,7 +40,22 @@
         <div v-loading="loading" class="profile-content">
           <div class="profile-card glass-panel">
             <div class="avatar-section">
-              <el-avatar :size="120" :src="formData.avatar || defaultAvatar" class="profile-avatar" />
+              <el-upload
+                class="avatar-uploader"
+                action=""
+                :auto-upload="false"
+                :show-file-list="false"
+                :on-change="handleAvatarChange"
+                accept="image/*"
+              >
+                <div class="avatar-wrapper">
+                  <el-avatar :size="120" :src="avatarPreview || resolveAvatarUrl(formData.avatar)" class="profile-avatar" />
+                  <div class="avatar-upload-overlay">
+                    <el-icon :size="28"><Upload /></el-icon>
+                    <span>更换头像</span>
+                  </div>
+                </div>
+              </el-upload>
               <h3 class="profile-name">{{ displayName }}</h3>
               <p class="profile-username">@{{ formData.username }}</p>
             </div>
@@ -97,13 +112,24 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
+import request from '@/utils/request'
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const loading = ref(false)
+const avatarUploading = ref(false)
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
+const avatarPreview = ref('')
+
+const resolveAvatarUrl = (avatar?: string) => {
+  if (!avatar) return defaultAvatar
+  if (avatar.startsWith('http')) return avatar
+  return avatar
+}
 
 const formData = reactive({
   username: '',
@@ -128,6 +154,37 @@ const syncFormFromStore = () => {
     formData.status = userStore.userInfo.status
     formData.createTime = userStore.userInfo.createTime
     formData.updateTime = userStore.userInfo.updateTime
+  }
+}
+
+const handleAvatarChange = async (uploadFile: any) => {
+  const raw = uploadFile.raw
+  if (!raw.type.startsWith('image/')) {
+    ElMessage.error('仅支持上传图片文件')
+    return
+  }
+  if (raw.size > 5 * 1024 * 1024) {
+    ElMessage.error('图片大小不能超过5MB')
+    return
+  }
+
+  avatarUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', raw)
+    const res: any = await request.post('/file/avatar', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 30000,
+    })
+    const newAvatarUrl = res.data
+    formData.avatar = newAvatarUrl
+    avatarPreview.value = newAvatarUrl
+    userStore.setUserInfo({ avatar: newAvatarUrl })
+    ElMessage.success('头像更新成功')
+  } catch {
+    ElMessage.error('头像上传失败')
+  } finally {
+    avatarUploading.value = false
   }
 }
 
@@ -265,9 +322,42 @@ onMounted(loadUserInfo)
   padding: 20px 0;
 }
 
+.avatar-uploader {
+  display: inline-block;
+}
+
+.avatar-wrapper {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+
 .profile-avatar {
   border: 4px solid #fff;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.avatar-upload-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.25s;
+  font-size: 0.8rem;
+  gap: 4px;
+}
+
+.avatar-wrapper:hover .avatar-upload-overlay {
+  opacity: 1;
 }
 
 .profile-name {
