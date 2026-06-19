@@ -27,7 +27,7 @@ request.interceptors.response.use(
     const res = response.data
     if (res.code !== 200) {
       ElMessage.error(res.message || 'Error')
-      if (res.code === 401) {
+      if (res.code === 401 || res.code === 403) {
         localStorage.removeItem('token')
         router.push('/login')
       }

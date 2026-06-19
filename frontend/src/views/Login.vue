@@ -71,7 +71,12 @@ const handleLogin = async () => {
   try {
     const res: any = await request.post('/user/login', loginForm.value)
     userStore.setToken(res.data)
-    await userStore.fetchUserInfo()
+    const userInfo = await userStore.fetchUserInfo()
+    if (userInfo && userInfo.status === 0) {
+      userStore.logout()
+      ElMessage.error('账号已被禁用，请联系管理员')
+      return
+    }
     if (rememberMe.value) {
       localStorage.setItem('saved_username', loginForm.value.username)
     } else {

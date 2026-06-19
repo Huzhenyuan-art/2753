@@ -28,24 +28,49 @@ public class UserController {
     public Result<String> login(@RequestBody Map<String, String> loginData) {
         String username = loginData.get("username");
         String password = loginData.get("password");
-        String token = userService.login(username, password);
-        if (token != null) {
-            return Result.success(token);
+        try {
+            String token = userService.login(username, password);
+            if (token != null) {
+                return Result.success(token);
+            }
+            return Result.error(401, "用户名或密码错误");
+        } catch (RuntimeException e) {
+            return Result.error(403, e.getMessage());
         }
-        return Result.error(401, "用户名或密码错误");
     }
 
     @GetMapping("/list")
     public Result<Page<User>> list(@RequestParam(defaultValue = "1") Integer pageNum,
                                  @RequestParam(defaultValue = "10") Integer pageSize,
-                                 @RequestParam(required = false) String username) {
+                                 @RequestParam(required = false) String username,
+                                 @RequestParam(required = false) Integer status) {
         Page<User> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         if (StringUtils.hasText(username)) {
             wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
         }
+        if (status != null) {
+            wrapper.eq(User::getStatus, status);
+        }
         wrapper.orderByDesc(User::getCreateTime);
         return Result.success(userService.page(page, wrapper));
+    }
+
+    @PutMapping("/{id}/status")
+    public Result<String> updateStatus(@PathVariable Long id, @RequestParam Integer status) {
+        User user = userService.getById(id);
+        if (user == null) {
+            return Result.error(404, "用户不存在");
+        }
+        if ("admin".equals(user.getUsername())) {
+            return Result.error(403, "管理员账号不允许禁用");
+        }
+        if (status != 0 && status != 1) {
+            return Result.error(400, "状态值不合法，只能为 0 或 1");
+        }
+        user.setStatus(status);
+        userService.updateById(user);
+        return Result.success(status == 1 ? "用户已启用" : "用户已禁用");
     }
 
     @PostMapping

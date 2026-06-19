@@ -54,6 +54,16 @@
               <el-icon><Search /></el-icon>
             </template>
           </el-input>
+          <el-select
+            v-model="statusFilter"
+            placeholder="状态"
+            clearable
+            @clear="fetchData"
+            class="status-filter"
+          >
+            <el-option label="正常" :value="1" />
+            <el-option label="禁用" :value="0" />
+          </el-select>
           <el-button @click="fetchData" class="search-btn">查询</el-button>
         </div>
 
@@ -72,14 +82,28 @@
             </el-table-column>
             <el-table-column prop="nickname" label="姓名" min-width="120" />
             <el-table-column prop="email" label="电子邮箱" min-width="180" />
+            <el-table-column label="状态" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 1 ? 'success' : 'danger'" effect="light" round>
+                  {{ row.status === 1 ? '正常' : '禁用' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="入职时间" width="180">
               <template #default="{ row }">
                 <span class="time-stamp">{{ formatDate(row.createTime) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="160" fixed="right">
+            <el-table-column label="操作" width="240" fixed="right">
               <template #default="{ row }">
                 <div class="row-actions">
+                  <el-button 
+                    link 
+                    :type="row.status === 1 ? 'warning' : 'success'" 
+                    @click="confirmToggleStatus(row)"
+                    :disabled="row.username === 'admin'"
+                  >{{ row.status === 1 ? '禁用' : '启用' }}</el-button>
+                  <el-divider direction="vertical" />
                   <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
                   <el-divider direction="vertical" />
                   <el-button 
@@ -127,6 +151,12 @@
         <el-form-item label="电子邮箱" prop="email">
           <el-input v-model="userForm.email" placeholder="example@domain.com" />
         </el-form-item>
+        <el-form-item label="账号状态" prop="status">
+          <el-radio-group v-model="userForm.status">
+            <el-radio :value="1">正常</el-radio>
+            <el-radio :value="0">禁用</el-radio>
+          </el-radio-group>
+        </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -159,6 +189,7 @@ const total = ref(0)
 const pageNum = ref(1)
 const pageSize = ref(10)
 const searchQuery = ref('')
+const statusFilter = ref<number | undefined>(undefined)
 const loading = ref(false)
 
 const dialogVisible = ref(false)
@@ -170,7 +201,8 @@ const userForm = ref<any>({
   username: '',
   password: '',
   nickname: '',
-  email: ''
+  email: '',
+  status: 1
 })
 
 const userRules = {
@@ -183,13 +215,15 @@ const userRules = {
 const fetchData = async () => {
   loading.value = true
   try {
-    const res: any = await request.get('/user/list', {
-      params: {
-        pageNum: pageNum.value,
-        pageSize: pageSize.value,
-        username: searchQuery.value
-      }
-    })
+    const params: any = {
+      pageNum: pageNum.value,
+      pageSize: pageSize.value,
+      username: searchQuery.value
+    }
+    if (statusFilter.value !== undefined && statusFilter.value !== null) {
+      params.status = statusFilter.value
+    }
+    const res: any = await request.get('/user/list', { params })
     userList.value = res.data.records
     total.value = res.data.total
   } finally {
@@ -199,8 +233,29 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   dialogTitle.value = '新增用户档案'
-  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '' }
+  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '', status: 1 }
   dialogVisible.value = true
+}
+
+const confirmToggleStatus = (row: any) => {
+  const targetStatus = row.status === 1 ? 0 : 1
+  const actionText = targetStatus === 1 ? '启用' : '禁用'
+  ElMessageBox.confirm(
+    `确定要${actionText}用户 "${row.nickname}" 吗？`,
+    '操作确认',
+    {
+      confirmButtonText: `确定${actionText}`,
+      cancelButtonText: '取消',
+      type: targetStatus === 1 ? 'success' : 'warning',
+      roundButton: true
+    }
+  ).then(async () => {
+    const res: any = await request.put(`/user/${row.id}/status`, null, {
+      params: { status: targetStatus }
+    })
+    ElMessage.success(res.message || `已${actionText}用户`)
+    fetchData()
+  })
 }
 
 const handleEdit = (row: any) => {
@@ -376,7 +431,12 @@ onMounted(() => {
   max-width: 400px;
 }
 
-.search-bar :deep(.el-input__wrapper) {
+.status-filter {
+  width: 140px;
+}
+
+.search-bar :deep(.el-input__wrapper),
+.status-filter :deep(.el-select__wrapper) {
   border-radius: 10px;
   box-shadow: 0 0 0 1px #e2e8f0 inset;
 }
