@@ -116,7 +116,7 @@ const formData = reactive({
 })
 
 const displayName = computed(() => {
-  return formData.nickname || formData.username || '用户'
+  return formData.nickname || formData.username || userStore.jwtUsername || '用户'
 })
 
 const syncFormFromStore = () => {

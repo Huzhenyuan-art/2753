@@ -181,7 +181,7 @@ const userStore = useUserStore()
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
 
 const displayName = computed(() => {
-  return userStore.userInfo?.nickname || userStore.userInfo?.username || '用户'
+  return userStore.userInfo?.nickname || userStore.userInfo?.username || userStore.jwtUsername || '用户'
 })
 
 const userList = ref([])
