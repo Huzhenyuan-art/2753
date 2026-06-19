@@ -29,7 +29,7 @@ services:
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider http://localhost:8080/api/user/list?pageNum=1&pageSize=1 || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
