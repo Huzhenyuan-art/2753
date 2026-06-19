@@ -3,6 +3,7 @@ package com.example.usermanager.controller;
 import com.example.usermanager.common.Result;
 import com.example.usermanager.entity.User;
 import com.example.usermanager.service.UserService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.UUID;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/file")
 public class FileUploadController {
@@ -33,7 +35,7 @@ public class FileUploadController {
 
         String contentType = file.getContentType();
         if (contentType == null || !contentType.startsWith("image/")) {
-            return Result.error(400, "仅支持上传图片文件");
+            return Result.error(400, "仅支持上传图片文件（如 JPG、PNG、GIF 等）");
         }
 
         if (file.getSize() > 20 * 1024 * 1024) {
@@ -41,9 +43,16 @@ public class FileUploadController {
         }
 
         try {
-            Path dirPath = Paths.get(uploadDir);
+            Path dirPath = Paths.get(uploadDir).toAbsolutePath().normalize();
+
             if (!Files.exists(dirPath)) {
                 Files.createDirectories(dirPath);
+                log.info("创建上传目录: {}", dirPath);
+            }
+
+            if (!Files.isWritable(dirPath)) {
+                log.error("上传目录不可写: {}", dirPath);
+                return Result.error(500, "服务器存储异常，请联系管理员");
             }
 
             String originalFilename = file.getOriginalFilename();
@@ -56,6 +65,8 @@ public class FileUploadController {
             Path filePath = dirPath.resolve(filename);
             file.transferTo(filePath.toFile());
 
+            log.info("头像上传成功: {} -> {}", originalFilename, filePath);
+
             String avatarUrl = "/uploads/avatars/" + filename;
 
             String username = SecurityContextHolder.getContext().getAuthentication().getName();
@@ -67,7 +78,11 @@ public class FileUploadController {
 
             return Result.success(avatarUrl);
         } catch (IOException e) {
-            return Result.error(500, "文件上传失败: " + e.getMessage());
+            log.error("头像上传失败, uploadDir={}, error={}", uploadDir, e.getMessage(), e);
+            return Result.error(500, "头像上传失败，请稍后重试");
+        } catch (Exception e) {
+            log.error("头像上传未知异常: {}", e.getMessage(), e);
+            return Result.error(500, "系统异常，请稍后重试");
         }
     }
 }

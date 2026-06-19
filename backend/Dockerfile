@@ -18,5 +18,7 @@ FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
+RUN mkdir -p /app/uploads/avatars && chmod -R 755 /app/uploads
+
 EXPOSE 8080
 ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-jar", "app.jar"]

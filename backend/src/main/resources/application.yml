@@ -21,7 +21,7 @@ spring:
       mode: never
 
 file:
-  upload-dir: ./uploads/avatars
+  upload-dir: /app/uploads/avatars
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml

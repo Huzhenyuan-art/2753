@@ -1085,3 +1085,359 @@ server {
     }
 }
 ```
+
+---
+
+# 头像上传 FileNotFoundException 修复指南
+
+## 问题描述
+
+用户在系统中上传头像图片时，出现以下错误提示：
+
+```
+文件上传失败: java.io.FileNotFoundException:
+/tmp/tomcat.8080.6904704028876641624/work/Tomcat/localhost/ROOT/./uploads/avatars/6a162223635d47fb824c5b02b125aba9.jpg
+(No such file or directory)
+```
+
+---
+
+## 原因分析
+
+### 核心问题：相对路径 `./` 在运行时被解析到 Tomcat 临时目录
+
+配置文件 `application.yml` 中使用了相对路径：
+
+```yaml
+file:
+  upload-dir: ./uploads/avatars   # ❌ 相对路径
+```
+
+**路径解析过程**：
+
+```
+配置值:  ./uploads/avatars
+         ↓ JVM 解析 user.dir
+实际路径: /tmp/tomcat.8080.6904704028876641624/work/Tomcat/localhost/ROOT/./uploads/avatars/
+```
+
+### 为什么会解析到 Tomcat 临时目录？
+
+1. Spring Boot 内嵌 Tomcat 运行时，会将临时工作目录设置到 `/tmp/tomcat.PORT.RANDOM/`
+2. JVM 的 `user.dir`（用户工作目录）指向该临时目录
+3. Java 的 `Paths.get("./uploads/avatars")` 基于 `user.dir` 解析相对路径
+4. 因此 `./uploads/avatars` 被解析到 `/tmp/tomcat.xxxx/.../uploads/avatars/`
+
+### 问题链条
+
+| 问题 | 影响 |
+|------|------|
+| 相对路径解析到 Tomcat 临时目录 | 上传文件存储在临时目录中 |
+| Tomcat 临时目录可能被系统清理（Linux `/tmp` 定期清理） | 已上传的头像文件丢失 |
+| `Files.createDirectories()` 可能成功创建临时目录，但 `file.transferTo()` 写入时临时目录已被清理 | FileNotFoundException |
+| 容器重启后临时目录路径变化（随机数部分改变） | 旧文件无法访问，新上传指向不同目录 |
+| `WebMvcConfig` 的 `file:` 资源位置也用相对路径 | 即使文件存在也无法通过 URL 访问 |
+| Docker 容器中没有 volume 持久化 | 容器重建后所有上传文件丢失 |
+
+### 本地开发 vs Docker 部署的差异
+
+| 环境 | `user.dir` | `./uploads/avatars` 解析结果 | 是否出错 |
+|------|-----------|---------------------------|----------|
+| 本地 `mvn spring-boot:run` | 项目根目录 | `/项目路径/uploads/avatars` | 通常正常 |
+| 本地 `java -jar app.jar` | JAR 所在目录 | `/app/uploads/avatars` | 通常正常 |
+| Docker 容器 | Tomcat 临时目录 | `/tmp/tomcat.xxxx/.../uploads/avatars/` | **出错** |
+
+这也解释了为什么在本地开发时可能不会发现问题，而部署到 Docker 后才暴露。
+
+---
+
+## 解决方案
+
+采用 **四层防护** 组合方案，从配置、运行时、容器、数据持久化四个层面彻底解决问题：
+
+### 步骤一：使用绝对路径替代相对路径
+
+修改 `backend/src/main/resources/application.yml`：
+
+```yaml
+file:
+  upload-dir: /app/uploads/avatars   # ✅ 绝对路径，明确无歧义
+```
+
+**原理**：绝对路径不受 `user.dir` 影响，无论 JVM 工作目录在哪里，路径始终指向 `/app/uploads/avatars/`。
+
+### 步骤二：Dockerfile 中预创建上传目录
+
+修改 `backend/Dockerfile`：
+
+```dockerfile
+# Run stage
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /app/target/*.jar app.jar
+
+RUN mkdir -p /app/uploads/avatars && chmod -R 755 /app/uploads   # ✅ 预创建 + 设置权限
+
+EXPOSE 8080
+ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-jar", "app.jar"]
+```
+
+**原理**：
+- `mkdir -p` 确保目录在容器启动前就已存在
+- `chmod -R 755` 确保目录有读写执行权限
+- 即使 `UploadDirConfig` 的 `@PostConstruct` 也能创建目录，Dockerfile 预创建是更早的防线
+
+### 步骤三：docker-compose.yml 添加 volume 持久化
+
+修改 `docker-compose.yml`：
+
+```yaml
+backend:
+    # ...
+    volumes:
+      - avatar_data:/app/uploads/avatars   # ✅ Docker volume 持久化
+
+volumes:
+  mysql_data:
+  avatar_data:                             # ✅ 声明命名卷
+```
+
+**原理**：
+- Docker 命名卷 (`avatar_data`) 的数据独立于容器生命周期
+- 容器重建、重启后，上传的文件仍然存在
+- 命名卷比绑定挂载更适合生产环境，Docker 自动管理存储位置
+
+### 步骤四：启动时自动初始化上传目录
+
+新增 `backend/src/main/java/com/example/usermanager/config/UploadDirConfig.java`：
+
+```java
+@Slf4j
+@Configuration
+public class UploadDirConfig {
+
+    @Value("${file.upload-dir}")
+    private String uploadDir;
+
+    @PostConstruct
+    public void initUploadDir() {
+        try {
+            Path dirPath = Paths.get(uploadDir).toAbsolutePath().normalize();
+            if (!Files.exists(dirPath)) {
+                Files.createDirectories(dirPath);
+                log.info("上传目录已创建: {}", dirPath);
+            } else {
+                log.info("上传目录已存在: {}", dirPath);
+            }
+        } catch (Exception e) {
+            log.error("创建上传目录失败: uploadDir={}, error={}", uploadDir, e.getMessage(), e);
+        }
+    }
+}
+```
+
+**原理**：
+- `@PostConstruct` 在 Spring Bean 初始化完成后自动执行
+- 使用 `toAbsolutePath().normalize()` 确保路径解析为绝对路径
+- 本地开发环境（没有 Dockerfile 预创建）也能自动创建目录
+- 日志输出便于运维排障
+
+### 步骤五：FileUploadController 增强路径解析和错误处理
+
+```java
+// 关键修改点
+Path dirPath = Paths.get(uploadDir).toAbsolutePath().normalize();  // ✅ 显式转为绝对路径
+
+if (!Files.exists(dirPath)) {
+    Files.createDirectories(dirPath);
+    log.info("创建上传目录: {}", dirPath);
+}
+
+if (!Files.isWritable(dirPath)) {  // ✅ 写入前检查权限
+    log.error("上传目录不可写: {}", dirPath);
+    return Result.error(500, "服务器存储异常，请联系管理员");
+}
+
+// ... 文件写入
+
+} catch (IOException e) {
+    log.error("头像上传失败, uploadDir={}, error={}", uploadDir, e.getMessage(), e);
+    return Result.error(500, "头像上传失败，请稍后重试");  // ✅ 不暴露技术细节
+} catch (Exception e) {
+    log.error("头像上传未知异常: {}", e.getMessage(), e);
+    return Result.error(500, "系统异常，请稍后重试");
+}
+```
+
+**关键改进**：
+- `toAbsolutePath().normalize()`：即使配置值是相对路径，也显式转为绝对路径（防御性编程）
+- `Files.isWritable()` 检查：在写入前验证目录可写权限
+- 分离 `IOException` 和 `Exception`：IO 异常提供更具体的日志
+- 中文错误提示不暴露技术细节（如异常类名和路径）
+- 日志中记录 `uploadDir` 配置值，便于排查配置问题
+
+### 步骤六：WebMvcConfig 静态资源映射使用绝对路径
+
+```java
+@Override
+public void addResourceHandlers(ResourceHandlerRegistry registry) {
+    String absolutePath = Paths.get(uploadDir).toAbsolutePath().normalize().toString();
+    registry.addResourceHandler("/uploads/avatars/**")
+            .addResourceLocations("file:" + absolutePath + "/");  // ✅ 使用绝对路径
+}
+```
+
+**原理**：Spring 的 `file:` 资源位置如果使用相对路径，同样会基于 `user.dir` 解析。转为绝对路径确保资源位置与文件写入位置一致。
+
+---
+
+## 修复后的防护层级
+
+```
+第1层: Dockerfile 预创建目录 + 设置权限（构建时）
+  ↓ 目录已存在
+第2层: UploadDirConfig @PostConstruct 自动创建（启动时）
+  ↓ 确保目录存在
+第3层: FileUploadController toAbsolutePath() + isWritable() 检查（运行时）
+  ↓ 确保路径正确 + 可写
+第4层: docker-compose.yml volume 持久化（数据安全）
+  ↓ 数据不丢失
+```
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/src/main/resources/application.yml` | `file.upload-dir` 从相对路径 `./uploads/avatars` 改为绝对路径 `/app/uploads/avatars` |
+| `backend/Dockerfile` | 添加 `RUN mkdir -p /app/uploads/avatars && chmod -R 755 /app/uploads` 预创建目录 |
+| `docker-compose.yml` | backend 添加 `volumes: avatar_data:/app/uploads/avatars`；volumes 声明 `avatar_data` |
+| `backend/src/main/java/com/example/usermanager/controller/FileUploadController.java` | 路径解析加 `toAbsolutePath().normalize()`；增加 `isWritable()` 检查；添加 `@Slf4j` 日志；分离异常处理；中文错误提示优化 |
+| `backend/src/main/java/com/example/usermanager/config/WebMvcConfig.java` | 资源位置使用 `toAbsolutePath().normalize()` 转绝对路径 |
+| `backend/src/main/java/com/example/usermanager/config/UploadDirConfig.java` | **新增文件**，`@PostConstruct` 启动时自动创建上传目录 |
+
+---
+
+## 验证方法
+
+### 一、本地开发环境验证
+
+```bash
+cd backend
+
+# 1. 确认上传目录配置
+grep upload-dir src/main/resources/application.yml
+# 预期：upload-dir: /app/uploads/avatars（或本地可用的绝对路径）
+
+# 2. 启动后端
+mvn spring-boot:run
+
+# 3. 观察启动日志
+# 预期输出：
+#   上传目录已创建: /app/uploads/avatars
+#   或
+#   上传目录已存在: /app/uploads/avatars
+
+# 4. 测试上传
+TOKEN=$(curl -s -X POST http://localhost:8080/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data'])")
+
+curl -X POST http://localhost:8080/api/file/avatar \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@test_image.jpg" \
+  -w "\nHTTP Status: %{http_code}\n"
+# 预期：HTTP Status: 200，返回头像 URL
+
+# 5. 验证文件存在
+ls /app/uploads/avatars/
+# 预期：显示刚上传的图片文件
+```
+
+### 二、Docker 部署环境验证
+
+```bash
+# 1. 重新构建
+docker-compose up -d --build
+
+# 2. 检查后端启动日志
+docker-compose logs backend | grep "上传目录"
+# 预期：上传目录已创建: /app/uploads/avatars（或已存在）
+
+# 3. 在容器内验证目录存在
+docker exec user-manager-backend ls -la /app/uploads/avatars/
+# 预期：目录存在且权限为 755
+
+# 4. 测试上传
+TOKEN=$(curl -s -X POST http://localhost:32753/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data'])")
+
+curl -X POST http://localhost:32753/api/file/avatar \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@test_image.jpg"
+# 预期：code=200，返回头像 URL
+
+# 5. 验证文件持久化
+docker exec user-manager-backend ls /app/uploads/avatars/
+# 预期：显示上传的图片文件
+
+# 6. 容器重启后验证数据持久化
+docker-compose restart backend
+docker exec user-manager-backend ls /app/uploads/avatars/
+# 预期：文件仍在（volume 持久化）
+
+# 7. 容器重建后验证数据持久化
+docker-compose up -d --build
+docker exec user-manager-backend ls /app/uploads/avatars/
+# 预期：文件仍在（命名卷不随容器销毁）
+```
+
+### 三、错误处理验证
+
+| 测试场景 | 操作步骤 | 预期结果 |
+|----------|----------|----------|
+| 正常上传 | 选择一张 2MB JPG 图片 | 上传成功，头像即时显示 |
+| 空文件上传 | 不选择文件直接提交 | 提示"请选择要上传的文件" |
+| 非图片文件 | 选择一个 PDF 文件 | 提示"仅支持上传图片文件（如 JPG、PNG、GIF 等）" |
+| 超大文件 | 选择一张 >20MB 的图片 | 提示"图片大小不能超过20MB，请压缩后重试" |
+| 目录不可写 | 临时将目录权限改为 444 | 提示"服务器存储异常，请联系管理员" |
+| 容器重启 | 重启后访问已上传的头像 | 图片正常显示（volume 持久化） |
+
+---
+
+## 问题预防建议
+
+### 1. 文件路径配置原则
+
+| 原则 | 说明 |
+|------|------|
+| **永远使用绝对路径** | 相对路径在不同运行环境下解析结果不同 |
+| **配置值与运行环境解耦** | 通过环境变量覆盖配置，如 `FILE_UPLOAD_DIR=/data/uploads` |
+| **路径解析后立即日志输出** | 在 `@PostConstruct` 中输出解析后的绝对路径，方便排障 |
+
+### 2. 文件上传功能开发检查清单
+
+| 检查项 | 说明 |
+|--------|------|
+| 上传目录使用绝对路径 | `application.yml` 中 `file.upload-dir` 必须是绝对路径 |
+| Dockerfile 预创建目录 | `RUN mkdir -p ... && chmod ...` 确保目录存在且有权限 |
+| Docker Compose 添加 volume | 使用命名卷持久化上传数据 |
+| 启动时 `@PostConstruct` 初始化 | 运行时也自动创建目录（覆盖本地开发场景） |
+| `toAbsolutePath().normalize()` | 代码中显式转绝对路径（防御性编程） |
+| `Files.isWritable()` 检查 | 写入前验证权限 |
+| 静态资源映射路径一致 | `WebMvcConfig` 的 `file:` 位置必须与上传目录相同 |
+| 错误提示不暴露技术细节 | 不向用户展示异常类名、文件路径等 |
+
+### 3. 相对路径 vs 绝对路径对比
+
+| 场景 | 相对路径 `./uploads` | 绝对路径 `/app/uploads` |
+|------|---------------------|----------------------|
+| 本地 `mvn spring-boot:run` | 解析到项目目录 ✅ | 固定路径 ✅ |
+| 本地 `java -jar app.jar` | 解析到 JAR 目录 ✅ | 固定路径 ✅ |
+| Docker 容器 | 解析到 Tomcat 临时目录 ❌ | 固定路径 ✅ |
+| 容器重启后 | 临时目录路径可能变化 ❌ | 固定路径 ✅ |
+| 多实例部署 | 各实例路径可能不同 ❌ | 固定路径 ✅ |
+
+**结论**：生产环境中的文件存储路径，应始终使用绝对路径。
