@@ -28,6 +28,9 @@
                 <el-dropdown-item @click="goProfile">
                   <el-icon><User /></el-icon>个人中心
                 </el-dropdown-item>
+                <el-dropdown-item @click="goChangePassword">
+                  <el-icon><Lock /></el-icon>修改密码
+                </el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon>退出登录
                 </el-dropdown-item>
@@ -273,7 +276,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
+import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 
@@ -769,6 +772,10 @@ const confirmDelete = (row: any) => {
 
 const goProfile = () => {
   router.push('/profile')
+}
+
+const goChangePassword = () => {
+  router.push('/change-password')
 }
 
 const goAuditLog = () => {

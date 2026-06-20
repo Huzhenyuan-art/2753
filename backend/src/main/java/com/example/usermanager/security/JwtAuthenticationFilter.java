@@ -5,6 +5,7 @@ import com.example.usermanager.entity.User;
 import com.example.usermanager.service.UserService;
 import com.example.usermanager.util.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,6 +19,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -52,7 +55,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (StringUtils.hasText(token) && jwtUtils.validateToken(token)) {
             String username = jwtUtils.getUsernameFromToken(token);
             User user = userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-            if (user != null && user.getStatus() != null && user.getStatus() == 0) {
+            if (user == null) {
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json;charset=UTF-8");
+                Map<String, Object> result = new HashMap<>();
+                result.put("code", 401);
+                result.put("message", "用户不存在，请重新登录");
+                result.put("data", null);
+                response.getWriter().write(objectMapper.writeValueAsString(result));
+                return;
+            }
+            if (user.getStatus() != null && user.getStatus() == 0) {
                 response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                 response.setContentType("application/json;charset=UTF-8");
                 Map<String, Object> result = new HashMap<>();
@@ -61,6 +74,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 result.put("data", null);
                 response.getWriter().write(objectMapper.writeValueAsString(result));
                 return;
+            }
+            if (user.getPasswordChangedAt() != null) {
+                Claims claims = jwtUtils.parseClaims(token);
+                if (claims.getIssuedAt() != null) {
+                    LocalDateTime tokenIssuedAt = claims.getIssuedAt().toInstant()
+                            .atZone(ZoneId.systemDefault()).toLocalDateTime();
+                    if (tokenIssuedAt.isBefore(user.getPasswordChangedAt())) {
+                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                        response.setContentType("application/json;charset=UTF-8");
+                        Map<String, Object> result = new HashMap<>();
+                        result.put("code", 401);
+                        result.put("message", "密码已修改，请重新登录");
+                        result.put("data", null);
+                        response.getWriter().write(objectMapper.writeValueAsString(result));
+                        return;
+                    }
+                }
             }
 
             List<String> roleCodes = jwtUtils.getRolesFromToken(token);

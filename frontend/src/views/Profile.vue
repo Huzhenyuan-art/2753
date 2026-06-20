@@ -20,6 +20,9 @@
                 <el-dropdown-item @click="goProfile">
                   <el-icon><User /></el-icon>个人中心
                 </el-dropdown-item>
+                <el-dropdown-item @click="goChangePassword">
+                  <el-icon><Lock /></el-icon>修改密码
+                </el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon>退出登录
                 </el-dropdown-item>
@@ -113,7 +116,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { Upload, Lock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import request from '@/utils/request'
 
@@ -205,6 +208,10 @@ const goHome = () => {
 
 const goProfile = () => {
   router.push('/profile')
+}
+
+const goChangePassword = () => {
+  router.push('/change-password')
 }
 
 const handleLogout = () => {

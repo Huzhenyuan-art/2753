@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     status TINYINT DEFAULT 1 COMMENT '状态：1-正常，0-禁用',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    password_changed_at DATETIME COMMENT '密码最后修改时间',
     is_deleted TINYINT DEFAULT 0 COMMENT '是否删除：0-未删除，1-已删除'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 

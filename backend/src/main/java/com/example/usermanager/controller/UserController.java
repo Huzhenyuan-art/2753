@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.usermanager.annotation.AuditLog;
 import com.example.usermanager.common.Result;
+import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
@@ -133,6 +134,30 @@ public class UserController {
         }
         userService.removeById(id);
         return Result.success();
+    }
+
+    @PutMapping("/change-password")
+    @AuditLog(operation = "CHANGE_PASSWORD", module = "用户管理", description = "修改密码", recordParams = false, recordResult = false)
+    public Result<String> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        try {
+            userService.changePassword(username, dto);
+            return Result.success("密码修改成功，请重新登录");
+        } catch (RuntimeException e) {
+            String errorCode = e.getMessage();
+            switch (errorCode) {
+                case "USER_NOT_FOUND":
+                    return Result.error(404, "用户不存在");
+                case "OLD_PASSWORD_ERROR":
+                    return Result.error(10004, "旧密码错误");
+                case "SAME_AS_OLD_PASSWORD":
+                    return Result.error(10005, "新密码不能与旧密码相同");
+                case "CONFIRM_PASSWORD_MISMATCH":
+                    return Result.error(10006, "确认密码与新密码不一致");
+                default:
+                    return Result.error(500, "密码修改失败，请重试");
+            }
+        }
     }
 
     @GetMapping("/info")
