@@ -1192,43 +1192,75 @@ const goDept = () => {
   router.push('/dept')
 }
 
-const getBaseUrl = () => {
-  return (import.meta.env.VITE_API_URL || '/api') as string
+const EXCEL_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+const readBlobAsText = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(blob, 'utf-8')
+  })
 }
 
-const handleDownloadTemplate = () => {
-  const token = localStorage.getItem('access_token') || ''
-  const url = `${getBaseUrl()}/user/template`
-  const link = document.createElement('a')
-  link.href = url
-  link.style.display = 'none'
-  if (token) {
-    const xhr = new XMLHttpRequest()
-    xhr.open('GET', url, true)
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    xhr.responseType = 'blob'
-    xhr.onload = () => {
-      if (xhr.status === 200) {
-        const blob = new Blob([xhr.response], {
-          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        })
-        const downloadUrl = window.URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = downloadUrl
-        a.download = '用户导入模板.xlsx'
-        a.click()
-        window.URL.revokeObjectURL(downloadUrl)
-        ElMessage.success('模板下载成功')
-      } else {
-        ElMessage.error('模板下载失败')
+const triggerBlobDownload = (blob: Blob, filename: string) => {
+  const downloadUrl = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = downloadUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(downloadUrl)
+}
+
+const handleBlobDownloadResponse = async (response: any, fallbackFilename: string) => {
+  const data = response.data
+  if (!(data instanceof Blob)) {
+    ElMessage.error('响应格式异常')
+    return
+  }
+
+  if (data.type === EXCEL_CONTENT_TYPE || data.size > 0 && !data.type.includes('json')) {
+    let filename = fallbackFilename
+    try {
+      const contentDisposition = (response.headers as any)?.['content-disposition']
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i)
+        if (match && match[1]) {
+          filename = decodeURIComponent(match[1].trim().replace(/^["']|["']$/g, ''))
+        }
       }
+    } catch {}
+    triggerBlobDownload(data, filename)
+    ElMessage.success('下载成功')
+    return
+  }
+
+  try {
+    const text = await readBlobAsText(data)
+    const json = JSON.parse(text)
+    if (json.message) {
+      ElMessage.error(json.message)
+    } else {
+      ElMessage.error('下载失败')
     }
-    xhr.onerror = () => {
-      ElMessage.error('网络异常，模板下载失败')
+  } catch {
+    ElMessage.error('下载失败')
+  }
+}
+
+const handleDownloadTemplate = async () => {
+  try {
+    const response = await request.get('/user/template', {
+      responseType: 'blob',
+      skipErrorToast: true,
+    } as any)
+    await handleBlobDownloadResponse(response, '用户导入模板.xlsx')
+  } catch (e: any) {
+    if (e.type !== 'business' && e.type !== 'http') {
+      ElMessage.error(e.message || '网络异常，模板下载失败')
     }
-    xhr.send()
-  } else {
-    link.click()
   }
 }
 
@@ -1268,7 +1300,7 @@ const handleBeforeImport = async (file: File) => {
   return false
 }
 
-const handleExport = () => {
+const handleExport = async () => {
   const params: any = {}
   if (searchQuery.value) {
     params.username = searchQuery.value
@@ -1284,34 +1316,20 @@ const handleExport = () => {
     params.sortOrder = sortOrder.value === 'ascending' ? 'asc' : 'desc'
   }
 
-  const token = localStorage.getItem('access_token') || ''
-  const queryString = new URLSearchParams(params).toString()
-  const url = `${getBaseUrl()}/user/export${queryString ? '?' + queryString : ''}`
-
-  const xhr = new XMLHttpRequest()
-  xhr.open('GET', url, true)
-  xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-  xhr.responseType = 'blob'
-  xhr.onload = () => {
-    if (xhr.status === 200) {
-      const blob = new Blob([xhr.response], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      })
-      const downloadUrl = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = downloadUrl
-      a.download = `用户列表_${new Date().toISOString().slice(0, 10)}.xlsx`
-      a.click()
-      window.URL.revokeObjectURL(downloadUrl)
-      ElMessage.success('导出成功')
-    } else {
-      ElMessage.error('导出失败')
+  try {
+    const response = await request.get('/user/export', {
+      params,
+      responseType: 'blob',
+      skipErrorToast: true,
+    } as any)
+    const now = new Date()
+    const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+    await handleBlobDownloadResponse(response, `用户列表_${ts}.xlsx`)
+  } catch (e: any) {
+    if (e.type !== 'business' && e.type !== 'http') {
+      ElMessage.error(e.message || '网络异常，导出失败')
     }
   }
-  xhr.onerror = () => {
-    ElMessage.error('网络异常，导出失败')
-  }
-  xhr.send()
 }
 
 const handleLogout = () => {

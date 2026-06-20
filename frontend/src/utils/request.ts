@@ -121,6 +121,10 @@ instance.interceptors.request.use(
 
 instance.interceptors.response.use(
   (response) => {
+    if (response.config.responseType === 'blob') {
+      return response
+    }
+
     const res = response.data
     const skipErrorToast = (response.config as any).skipErrorToast
 
@@ -142,6 +146,7 @@ instance.interceptors.response.use(
   async (error) => {
     const originalConfig = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
     const skipErrorToast = (error.config as any)?.skipErrorToast
+    const isBlobRequest = error.config?.responseType === 'blob'
 
     if (error.response) {
       const status = error.response.status
@@ -184,7 +189,7 @@ instance.interceptors.response.use(
           ElMessage.error('服务器内部错误，请稍后重试')
         } else if (status === 502 || status === 503) {
           ElMessage.error('服务暂时不可用，请稍后重试')
-        } else {
+        } else if (!isBlobRequest) {
           ElMessage.error(error.response.data?.message || '请求失败，请稍后重试')
         }
       }

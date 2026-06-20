@@ -16,8 +16,10 @@ import com.example.usermanager.service.DeptService;
 import com.example.usermanager.service.PermissionService;
 import com.example.usermanager.service.RoleService;
 import com.example.usermanager.service.UserService;
+import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -30,8 +32,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/user")
 public class UserController {
@@ -294,11 +298,41 @@ public class UserController {
     @GetMapping("/template")
     @AuditLog(operation = "DOWNLOAD_TEMPLATE", module = "用户管理", description = "下载用户导入模板")
     public void downloadTemplate(HttpServletResponse response) throws IOException {
-        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        response.setCharacterEncoding("utf-8");
-        String fileName = URLEncoder.encode("用户导入模板", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
-        response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
-        userService.downloadTemplate(response.getOutputStream());
+        ServletOutputStream outputStream = null;
+        try {
+            response.reset();
+            response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            response.setCharacterEncoding("utf-8");
+            response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+            response.setHeader("Pragma", "no-cache");
+            response.setHeader("Expires", "0");
+            String fileName = URLEncoder.encode("用户导入模板", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
+            response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
+            outputStream = response.getOutputStream();
+            userService.downloadTemplate(outputStream);
+            outputStream.flush();
+        } catch (Exception e) {
+            log.error("下载模板失败: ", e);
+            try {
+                if (outputStream != null) {
+                    outputStream.close();
+                }
+            } catch (IOException ignored) {}
+            response.reset();
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            response.setContentType("application/json;charset=UTF-8");
+            Map<String, Object> result = new HashMap<>();
+            result.put("code", 500);
+            result.put("message", "下载模板失败：" + (e.getMessage() != null ? e.getMessage() : "系统内部错误"));
+            result.put("data", null);
+            response.getWriter().write(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(result));
+        } finally {
+            if (outputStream != null) {
+                try {
+                    outputStream.close();
+                } catch (IOException ignored) {}
+            }
+        }
     }
 
     @PostMapping("/import")
@@ -328,40 +362,70 @@ public class UserController {
                             @RequestParam(required = false) String sortField,
                             @RequestParam(required = false) String sortOrder,
                             HttpServletResponse response) throws IOException {
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-        if (StringUtils.hasText(username)) {
-            wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
-        }
-        if (status != null) {
-            wrapper.eq(User::getStatus, status);
-        }
-        boolean sortApplied = false;
-        if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
-            boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
-            if ("username".equals(sortField)) {
-                if (isAsc) {
-                    wrapper.orderByAsc(User::getUsername);
-                } else {
-                    wrapper.orderByDesc(User::getUsername);
+        ServletOutputStream outputStream = null;
+        try {
+            LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+            if (StringUtils.hasText(username)) {
+                wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
+            }
+            if (status != null) {
+                wrapper.eq(User::getStatus, status);
+            }
+            boolean sortApplied = false;
+            if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
+                boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
+                if ("username".equals(sortField)) {
+                    if (isAsc) {
+                        wrapper.orderByAsc(User::getUsername);
+                    } else {
+                        wrapper.orderByDesc(User::getUsername);
+                    }
+                    sortApplied = true;
+                } else if ("createTime".equals(sortField)) {
+                    if (isAsc) {
+                        wrapper.orderByAsc(User::getCreateTime);
+                    } else {
+                        wrapper.orderByDesc(User::getCreateTime);
+                    }
+                    sortApplied = true;
                 }
-                sortApplied = true;
-            } else if ("createTime".equals(sortField)) {
-                if (isAsc) {
-                    wrapper.orderByAsc(User::getCreateTime);
-                } else {
-                    wrapper.orderByDesc(User::getCreateTime);
+            }
+            if (!sortApplied) {
+                wrapper.orderByDesc(User::getCreateTime);
+            }
+
+            response.reset();
+            response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            response.setCharacterEncoding("utf-8");
+            response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+            response.setHeader("Pragma", "no-cache");
+            response.setHeader("Expires", "0");
+            String fileName = URLEncoder.encode("用户列表", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
+            response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
+            outputStream = response.getOutputStream();
+            userService.exportUsers(outputStream, wrapper, deptId);
+            outputStream.flush();
+        } catch (Exception e) {
+            log.error("导出用户列表失败: ", e);
+            try {
+                if (outputStream != null) {
+                    outputStream.close();
                 }
-                sortApplied = true;
+            } catch (IOException ignored) {}
+            response.reset();
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            response.setContentType("application/json;charset=UTF-8");
+            Map<String, Object> result = new HashMap<>();
+            result.put("code", 500);
+            result.put("message", "导出失败：" + (e.getMessage() != null ? e.getMessage() : "系统内部错误"));
+            result.put("data", null);
+            response.getWriter().write(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(result));
+        } finally {
+            if (outputStream != null) {
+                try {
+                    outputStream.close();
+                } catch (IOException ignored) {}
             }
         }
-        if (!sortApplied) {
-            wrapper.orderByDesc(User::getCreateTime);
-        }
-
-        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        response.setCharacterEncoding("utf-8");
-        String fileName = URLEncoder.encode("用户列表", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
-        response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
-        userService.exportUsers(response.getOutputStream(), wrapper, deptId);
     }
 }
