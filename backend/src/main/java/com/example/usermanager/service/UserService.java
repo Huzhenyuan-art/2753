@@ -1,8 +1,15 @@
 package com.example.usermanager.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.entity.User;
 
+import java.util.List;
+
 public interface UserService extends IService<User> {
-    String login(String username, String password);
+    LoginUserDTO login(String username, String password);
+
+    void assignRoles(Long userId, List<Long> roleIds);
+
+    List<Long> getUserRoleIds(Long userId);
 }

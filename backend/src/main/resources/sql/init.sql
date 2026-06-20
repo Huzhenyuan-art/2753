@@ -19,8 +19,91 @@ CREATE TABLE IF NOT EXISTS sys_user (
     is_deleted TINYINT DEFAULT 0 COMMENT '是否删除：0-未删除，1-已删除'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
+-- Role Table
+CREATE TABLE IF NOT EXISTS sys_role (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    name VARCHAR(50) NOT NULL COMMENT '角色名称',
+    code VARCHAR(50) NOT NULL UNIQUE COMMENT '角色编码',
+    description VARCHAR(255) COMMENT '角色描述',
+    status TINYINT DEFAULT 1 COMMENT '状态：1-正常，0-禁用',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted TINYINT DEFAULT 0 COMMENT '是否删除：0-未删除，1-已删除'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='角色表';
+
+-- Permission Table
+CREATE TABLE IF NOT EXISTS sys_permission (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    name VARCHAR(50) NOT NULL COMMENT '权限名称',
+    code VARCHAR(100) NOT NULL UNIQUE COMMENT '权限编码',
+    type VARCHAR(20) DEFAULT 'BUTTON' COMMENT '权限类型：MENU-菜单，BUTTON-按钮',
+    description VARCHAR(255) COMMENT '权限描述',
+    status TINYINT DEFAULT 1 COMMENT '状态：1-正常，0-禁用',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted TINYINT DEFAULT 0 COMMENT '是否删除：0-未删除，1-已删除'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='权限表';
+
+-- User-Role Association Table
+CREATE TABLE IF NOT EXISTS sys_user_role (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    user_id BIGINT NOT NULL COMMENT '用户ID',
+    role_id BIGINT NOT NULL COMMENT '角色ID',
+    UNIQUE KEY uk_user_role (user_id, role_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户角色关联表';
+
+-- Role-Permission Association Table
+CREATE TABLE IF NOT EXISTS sys_role_permission (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    role_id BIGINT NOT NULL COMMENT '角色ID',
+    permission_id BIGINT NOT NULL COMMENT '权限ID',
+    UNIQUE KEY uk_role_permission (role_id, permission_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='角色权限关联表';
+
 -- Seed Data (Password is '123456' encrypted with BCrypt)
 INSERT IGNORE INTO sys_user (username, password, nickname, email) VALUES 
 ('admin', '$2a$10$P1UK1iryZJXe9T5ZpfCHF.6BzLBokxBYzQfHx1P99d/snxM4KFETe', '管理员', 'admin@example.com'),
 ('zhangsan', '$2a$10$P1UK1iryZJXe9T5ZpfCHF.6BzLBokxBYzQfHx1P99d/snxM4KFETe', '张三', 'zhangsan@example.com'),
 ('lisi', '$2a$10$P1UK1iryZJXe9T5ZpfCHF.6BzLBokxBYzQfHx1P99d/snxM4KFETe', '李四', 'lisi@example.com');
+
+-- Seed Role Data
+INSERT IGNORE INTO sys_role (name, code, description) VALUES 
+('超级管理员', 'ADMIN', '拥有所有权限'),
+('编辑者', 'EDITOR', '可查看、新增、编辑用户'),
+('浏览者', 'VIEWER', '仅可查看用户列表');
+
+-- Seed Permission Data
+INSERT IGNORE INTO sys_permission (name, code, type, description) VALUES 
+('查看用户列表', 'user:list', 'BUTTON', '查看用户列表权限'),
+('新增用户', 'user:add', 'BUTTON', '新增用户权限'),
+('编辑用户', 'user:edit', 'BUTTON', '编辑用户权限'),
+('删除用户', 'user:delete', 'BUTTON', '删除用户权限'),
+('切换用户状态', 'user:status', 'BUTTON', '启用/禁用用户权限');
+
+-- Seed Role-Permission Association
+-- ADMIN 拥有所有权限
+INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
+SELECT r.id, p.id FROM sys_role r, sys_permission p WHERE r.code = 'ADMIN';
+
+-- EDITOR 拥有 list, add, edit, status
+INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
+SELECT r.id, p.id FROM sys_role r, sys_permission p
+WHERE r.code = 'EDITOR' AND p.code IN ('user:list', 'user:add', 'user:edit', 'user:status');
+
+-- VIEWER 仅拥有 list
+INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
+SELECT r.id, p.id FROM sys_role r, sys_permission p
+WHERE r.code = 'VIEWER' AND p.code IN ('user:list');
+
+-- Seed User-Role Association
+-- admin -> ADMIN
+INSERT IGNORE INTO sys_user_role (user_id, role_id)
+SELECT u.id, r.id FROM sys_user u, sys_role r WHERE u.username = 'admin' AND r.code = 'ADMIN';
+
+-- zhangsan -> EDITOR
+INSERT IGNORE INTO sys_user_role (user_id, role_id)
+SELECT u.id, r.id FROM sys_user u, sys_role r WHERE u.username = 'zhangsan' AND r.code = 'EDITOR';
+
+-- lisi -> VIEWER
+INSERT IGNORE INTO sys_user_role (user_id, role_id)
+SELECT u.id, r.id FROM sys_user u, sys_role r WHERE u.username = 'lisi' AND r.code = 'VIEWER';

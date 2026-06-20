@@ -9,6 +9,11 @@
           </div>
         </div>
         <div class="header-right">
+          <div class="current-roles" v-if="userStore.userInfo?.roles?.length">
+            <el-tag v-for="role in userStore.userInfo.roles" :key="role.id" type="primary" effect="light" round class="role-tag">
+              {{ role.name }}
+            </el-tag>
+          </div>
           <el-dropdown trigger="click">
             <div class="user-profile">
               <el-avatar :size="32" :src="resolveAvatarUrl(userStore.userInfo?.avatar)" />
@@ -36,7 +41,7 @@
             <p class="page-desc">管理系统中的所有用户信息及权限设置</p>
           </div>
           <div class="action-section">
-            <el-button type="primary" class="add-btn" @click="handleAdd">
+            <el-button v-if="canAdd" type="primary" class="add-btn" @click="handleAdd">
               <el-icon><Plus /></el-icon> 新增用户
             </el-button>
           </div>
@@ -87,6 +92,14 @@
             </el-table-column>
             <el-table-column prop="nickname" label="姓名" min-width="120" />
             <el-table-column prop="email" label="电子邮箱" min-width="180" />
+            <el-table-column label="角色" min-width="160">
+              <template #default="{ row }">
+                <el-tag v-if="row._roles && row._roles.length" v-for="role in row._roles" :key="role.id" type="success" effect="light" round class="role-tag-inline">
+                  {{ role.name }}
+                </el-tag>
+                <span v-else class="no-role">未分配</span>
+              </template>
+            </el-table-column>
             <el-table-column label="状态" width="100" align="center">
               <template #default="{ row }">
                 <el-tag :type="row.status === 1 ? 'success' : 'danger'" effect="light" round>
@@ -99,24 +112,40 @@
                 <span class="time-stamp">{{ formatDate(row.createTime) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="240" fixed="right">
+            <el-table-column v-if="hasAnyAction" label="操作" :width="actionColumnWidth" fixed="right">
               <template #default="{ row }">
                 <div class="row-actions">
-                  <el-button 
-                    link 
-                    :type="row.status === 1 ? 'warning' : 'success'" 
-                    @click="confirmToggleStatus(row)"
-                    :disabled="row.username === 'admin'"
-                  >{{ row.status === 1 ? '禁用' : '启用' }}</el-button>
-                  <el-divider direction="vertical" />
-                  <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
-                  <el-divider direction="vertical" />
-                  <el-button 
-                    link 
-                    type="danger" 
-                    @click="confirmDelete(row)"
-                    :disabled="row.username === 'admin'"
-                  >删除</el-button>
+                  <template v-if="canChangeStatus">
+                    <el-button 
+                      link 
+                      :type="row.status === 1 ? 'warning' : 'success'" 
+                      @click="confirmToggleStatus(row)"
+                      :disabled="row.username === 'admin'"
+                    >{{ row.status === 1 ? '禁用' : '启用' }}</el-button>
+                  </template>
+                  <template v-if="canChangeStatus && canEdit">
+                    <el-divider direction="vertical" />
+                  </template>
+                  <template v-if="canEdit">
+                    <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
+                  </template>
+                  <template v-if="(canEdit || canChangeStatus) && canDelete">
+                    <el-divider direction="vertical" />
+                  </template>
+                  <template v-if="canDelete">
+                    <el-button 
+                      link 
+                      type="danger" 
+                      @click="confirmDelete(row)"
+                      :disabled="row.username === 'admin'"
+                    >删除</el-button>
+                  </template>
+                  <template v-if="canEditRole && (canEdit || canDelete || canChangeStatus)">
+                    <el-divider direction="vertical" />
+                  </template>
+                  <template v-if="canEditRole">
+                    <el-button link type="info" @click="handleAssignRole(row)">角色</el-button>
+                  </template>
                 </div>
               </template>
             </el-table-column>
@@ -180,6 +209,13 @@
             <el-radio :value="0">禁用</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-form-item v-if="canEditRole" label="角色">
+          <el-checkbox-group v-model="userForm.roleIds">
+            <el-checkbox v-for="role in allRoles" :key="role.id" :value="role.id">
+              {{ role.name }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -204,6 +240,23 @@ const userStore = useUserStore()
 
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
 
+const canList = computed(() => userStore.hasPermission('user:list') || userStore.isAdmin)
+const canAdd = computed(() => userStore.hasPermission('user:add') || userStore.isAdmin)
+const canEdit = computed(() => userStore.hasPermission('user:edit') || userStore.isAdmin)
+const canDelete = computed(() => userStore.hasPermission('user:delete') || userStore.isAdmin)
+const canChangeStatus = computed(() => userStore.hasPermission('user:status') || userStore.isAdmin)
+const canEditRole = computed(() => userStore.isAdmin)
+
+const hasAnyAction = computed(() => canEdit.value || canDelete.value || canChangeStatus.value || canEditRole.value)
+const actionColumnWidth = computed(() => {
+  let count = 0
+  if (canChangeStatus.value) count++
+  if (canEdit.value) count++
+  if (canDelete.value) count++
+  if (canEditRole.value) count++
+  return Math.max(count * 60 + 60, 180)
+})
+
 const resolveAvatarUrl = (avatar?: string) => {
   if (!avatar) return defaultAvatar
   if (avatar.startsWith('http')) return avatar
@@ -214,7 +267,15 @@ const displayName = computed(() => {
   return userStore.userInfo?.nickname || userStore.userInfo?.username || userStore.jwtUsername || '用户'
 })
 
-const userList = ref([])
+interface RoleOption {
+  id: number
+  name: string
+  code: string
+}
+
+const allRoles = ref<RoleOption[]>([])
+
+const userList = ref<any[]>([])
 const total = ref(0)
 const pageNum = ref(1)
 const pageSize = ref(10)
@@ -233,7 +294,8 @@ const userForm = ref<any>({
   nickname: '',
   email: '',
   avatar: '',
-  status: 1
+  status: 1,
+  roleIds: [] as number[]
 })
 
 const avatarPreview = ref('')
@@ -244,6 +306,24 @@ const userRules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }, { min: 6, max: 20, message: '密码长度在 6 到 20 个字符', trigger: 'blur' }],
   nickname: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }, { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }]
+}
+
+const fetchAllRoles = async () => {
+  try {
+    const res: any = await request.get('/role/list')
+    allRoles.value = res.data
+  } catch (e) {
+    allRoles.value = []
+  }
+}
+
+const loadUserRoles = async (userId: number) => {
+  try {
+    const res: any = await request.get(`/user/${userId}/roles`)
+    return res.data || []
+  } catch (e) {
+    return []
+  }
 }
 
 const fetchData = async () => {
@@ -258,7 +338,21 @@ const fetchData = async () => {
       params.status = statusFilter.value
     }
     const res: any = await request.get('/user/list', { params })
-    userList.value = res.data.records
+    const list = res.data.records || []
+    const roleMap = new Map<number, RoleOption[]>()
+    for (const role of allRoles.value) {
+      roleMap.set(role.id, [])
+    }
+    for (const row of list) {
+      row._roles = []
+      try {
+        const roleIds: number[] = await loadUserRoles(row.id)
+        row._roles = allRoles.value.filter((r: RoleOption) => roleIds.includes(r.id))
+      } catch (e) {
+        row._roles = []
+      }
+    }
+    userList.value = list
     total.value = res.data.total
   } finally {
     loading.value = false
@@ -267,13 +361,17 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   dialogTitle.value = '新增用户档案'
-  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '', avatar: '', status: 1 }
+  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '', avatar: '', status: 1, roleIds: [] }
   avatarPreview.value = ''
   avatarFile.value = null
   dialogVisible.value = true
 }
 
 const confirmToggleStatus = (row: any) => {
+  if (!canChangeStatus.value) {
+    ElMessage.warning('您没有切换用户状态的权限')
+    return
+  }
   const targetStatus = row.status === 1 ? 0 : 1
   const actionText = targetStatus === 1 ? '启用' : '禁用'
   ElMessageBox.confirm(
@@ -294,9 +392,30 @@ const confirmToggleStatus = (row: any) => {
   })
 }
 
-const handleEdit = (row: any) => {
+const handleEdit = async (row: any) => {
+  if (!canEdit.value) {
+    ElMessage.warning('您没有编辑用户的权限')
+    return
+  }
   dialogTitle.value = '编辑用户档案'
-  userForm.value = { ...row, password: '' }
+  let roleIds: number[] = []
+  if (canEditRole.value) {
+    roleIds = await loadUserRoles(row.id)
+  }
+  userForm.value = { ...row, password: '', roleIds }
+  avatarPreview.value = ''
+  avatarFile.value = null
+  dialogVisible.value = true
+}
+
+const handleAssignRole = async (row: any) => {
+  if (!canEditRole.value) {
+    ElMessage.warning('您没有分配角色的权限')
+    return
+  }
+  dialogTitle.value = `分配角色 - ${row.nickname || row.username}`
+  const roleIds = await loadUserRoles(row.id)
+  userForm.value = { ...row, password: '', roleIds }
   avatarPreview.value = ''
   avatarFile.value = null
   dialogVisible.value = true
@@ -331,9 +450,18 @@ const submitForm = async () => {
     }
     if (userForm.value.id) {
       await request.put('/user', userForm.value)
+      if (canEditRole.value && userForm.value.roleIds !== undefined) {
+        await request.put(`/user/${userForm.value.id}/roles`, { roleIds: userForm.value.roleIds })
+      }
       ElMessage.success('档案更新成功')
     } else {
-      await request.post('/user', userForm.value)
+      const addRes: any = await request.post('/user', userForm.value)
+      if (canEditRole.value && userForm.value.roleIds && userForm.value.roleIds.length) {
+        const newId = addRes.data?.id || userForm.value.id
+        if (newId) {
+          await request.put(`/user/${newId}/roles`, { roleIds: userForm.value.roleIds })
+        }
+      }
       ElMessage.success('成员添加成功')
     }
     dialogVisible.value = false
@@ -344,6 +472,10 @@ const submitForm = async () => {
 }
 
 const confirmDelete = (row: any) => {
+  if (!canDelete.value) {
+    ElMessage.warning('您没有删除用户的权限')
+    return
+  }
   ElMessageBox.confirm(
     `确定要永久删除用户 "${row.nickname}" 吗？此操作不可撤销。`,
     '安全确认',
@@ -375,10 +507,13 @@ const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-onMounted(() => {
-  fetchData()
+onMounted(async () => {
+  await fetchAllRoles()
+  if (canList.value) {
+    fetchData()
+  }
   if (!userStore.userInfo) {
-    userStore.fetchUserInfo()
+    await userStore.fetchUserInfo()
   }
 })
 </script>
@@ -598,5 +733,31 @@ onMounted(() => {
 .avatar-upload-tip {
   color: #94a3b8;
   font-size: 0.85rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.current-roles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.role-tag {
+  font-size: 12px;
+}
+
+.role-tag-inline {
+  margin-right: 4px;
+  font-size: 12px;
+}
+
+.no-role {
+  color: #94a3b8;
+  font-size: 13px;
 }
 </style>

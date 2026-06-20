@@ -142,9 +142,8 @@ const handleLogin = async () => {
   loginError.show = false
   try {
     const res: any = await request.post('/user/login', loginForm.value, { skipErrorToast: true } as any)
-    userStore.setToken(res.data)
-    const userInfo = await userStore.fetchUserInfo()
-    if (userInfo && userInfo.status === 0) {
+    userStore.setLoginData(res.data)
+    if (res.data && res.data.status === 0) {
       userStore.logout()
       setLoginError('account_disabled', '账号已被禁用，请联系管理员')
       return
