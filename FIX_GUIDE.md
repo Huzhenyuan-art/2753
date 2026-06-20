@@ -2544,3 +2544,382 @@ public class XxxSchemaInitializer {
 | 插入数据 | `INSERT IGNORE` / `ON DUPLICATE KEY UPDATE` | `INSERT INTO` |
 | 加列 | 先 `INFORMATION_SCHEMA` 检查再加 | `ALTER TABLE ADD COLUMN`（重复报错） |
 | 加索引 | 先 `INFORMATION_SCHEMA` 检查再加 | `CREATE INDEX`（重复报错） |
+
+---
+
+# 登录失败时审计记录状态错误修复指南
+
+## 问题描述
+
+用户登录失败（如用户名不存在、密码错误、账号被禁用）时，操作审计日志的 `status` 字段仍被错误地记录为 **1（成功）**，同时 `error_msg` 为空。审计记录无法反映实际登录结果。
+
+### 典型现象
+
+| 操作 | 实际结果 | 审计日志 status | 审计日志 error_msg | 是否正确 |
+|------|---------|---------------|-------------------|---------|
+| 输入正确用户名密码 | 登录成功 | 1（成功） | - | ✅ 正确 |
+| 输入不存在的用户名 | 登录失败 | 1（成功） | null | ❌ 错误 |
+| 输入错误的密码 | 登录失败 | 1（成功） | null | ❌ 错误 |
+| 登录已禁用的账号 | 登录失败 | 1（成功） | null | ❌ 错误 |
+
+同样的问题也会影响其他通过 `Result.error()` 返回业务失败的操作（如新增用户时用户名已存在）。
+
+---
+
+## 根因分析
+
+### 问题 1：切面仅依赖异常判断操作状态
+
+切面 [AuditLogAspect.java](file:///D:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/aspect/AuditLogAspect.java) 中的状态判断逻辑：
+
+```java
+Object result = null;
+try {
+    result = joinPoint.proceed();
+    auditLog.setStatus(1);        // ← 只要方法正常返回，就标记为成功
+    ...
+    return result;
+} catch (Throwable e) {
+    auditLog.setStatus(0);        // ← 只有抛异常才标记为失败
+    auditLog.setErrorMsg(e.getMessage());
+    throw e;
+}
+```
+
+**问题**：仅以"是否抛出异常"作为成功/失败的判定依据，没有考虑到业务系统中大量的"业务失败但方法正常返回"场景。
+
+### 问题 2：Controller 登录失败时通过 return Result.error() 返回，不抛异常
+
+[UserController.login()](file:///D:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/controller/UserController.java#L43-L62) 的业务逻辑：
+
+```java
+@PostMapping("/login")
+public Result<LoginUserDTO> login(@RequestBody Map<String, String> loginData) {
+    try {
+        LoginUserDTO loginUser = userService.login(username, password);
+        return Result.success(loginUser);           // ← 成功 code=200
+    } catch (RuntimeException e) {
+        String errorCode = e.getMessage();
+        switch (errorCode) {
+            case "USER_NOT_FOUND":
+                return Result.error(10001, "用户名不存在");   // ← 失败 code=10001，正常 return，不抛异常
+            case "PASSWORD_ERROR":
+                return Result.error(10002, "密码错误");       // ← 失败 code=10002，正常 return，不抛异常
+            case "ACCOUNT_DISABLED":
+                return Result.error(10003, "账号已被禁用");    // ← 失败 code=10003，正常 return，不抛异常
+            default:
+                return Result.error(401, "登录失败");         // ← 失败 code=401，正常 return，不抛异常
+        }
+    }
+}
+```
+
+**问题**：`userService.login()` 抛出的 `RuntimeException` 被 `catch` 捕获，然后 Controller **通过 `return Result.error(...)` 正常返回**，不再向上抛出异常。切面捕获不到任何异常，因此执行"成功"分支。
+
+### 问题形成链条
+
+```
+① 用户输入错误密码
+   ↓
+② userService.login(username, wrongPassword)
+   ↓ 抛出 RuntimeException("PASSWORD_ERROR")
+③ UserController.login() 的 catch 块捕获异常
+   ↓ return Result.error(10002, "密码错误")，不再向外抛
+④ AuditLogAspect 切面的 try 块正常结束
+   ↓ 执行 auditLog.setStatus(1)  ← 错误标记为成功
+⑤ 审计日志写入数据库，status=1，error_msg=null
+```
+
+### 同类受影响场景
+
+不仅是登录，所有 Controller 方法中通过 `Result.error()` 返回业务失败的操作都存在此问题，例如：
+- 新增用户：用户名已存在 → `Result.error(400, ...)`
+- 编辑用户：用户名被占用 → `Result.error(400, ...)`
+- 切换状态：管理员不允许禁用 → `Result.error(403, ...)`
+- 删除用户：失败 → `Result.error(400, ...)`
+- 分配角色：用户不存在 → `Result.error(404, ...)`
+
+---
+
+## 修复方案
+
+修改审计切面的状态判断逻辑：**当返回值为 `Result<?>` 类型时，以 `Result.code == 200` 作为成功判定标准**，而不是仅依据是否抛出异常。
+
+### 具体修改
+
+#### 修改 1：导入 Result 类
+
+在 `AuditLogAspect.java` 顶部新增 import：
+
+```java
+import com.example.usermanager.common.Result;
+```
+
+#### 修改 2：基于 Result.code 判断操作状态
+
+将原有的 `auditLog.setStatus(1)` 替换为：
+
+```java
+// 修改前
+result = joinPoint.proceed();
+auditLog.setStatus(1);
+
+// 修改后
+result = joinPoint.proceed();
+
+if (result instanceof Result<?> res) {
+    auditLog.setStatus(res.getCode() != null && res.getCode() == 200 ? 1 : 0);
+    if (res.getCode() == null || res.getCode() != 200) {
+        String errorMsg = res.getMessage();
+        if (errorMsg != null && errorMsg.length() > 1000) {
+            errorMsg = errorMsg.substring(0, 1000);
+        }
+        auditLog.setErrorMsg(errorMsg);
+    }
+} else {
+    auditLog.setStatus(1);
+}
+```
+
+**设计说明**：
+- `instanceof Result<?> res` 使用 Java 16+ 的模式匹配，避免重复强制转换
+- **Result 类型**：`code == 200` → 成功（status=1），否则失败（status=0），并写入 `error_msg`
+- **非 Result 类型**：方法正常返回视为成功（保留原有行为，兼容非标准返回）
+- **异常抛出**：仍由 `catch (Throwable e)` 分支处理（status=0，error_msg=异常消息）
+
+#### 修改 3：登录失败时也记录操作人用户名
+
+登录操作使用 `recordParams = false`（不记录密码），但登录失败时 JWT Token 不存在、SecurityContext 也没有认证信息，导致审计日志中的 `username` 为空。增加对 LOGIN 操作的特殊处理，从请求参数中提取 `username`（不提取密码）：
+
+```java
+// 在 SecurityContext 取用户名逻辑之后，增加：
+if ("LOGIN".equals(auditLogAnnotation.operation()) && auditLog.getUsername() == null) {
+    try {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        String[] paramNames = signature.getParameterNames();
+        Object[] args = joinPoint.getArgs();
+        if (paramNames != null && args != null) {
+            for (int i = 0; i < paramNames.length; i++) {
+                if ("loginData".equals(paramNames[i]) && args[i] instanceof java.util.Map) {
+                    @SuppressWarnings("unchecked")
+                    java.util.Map<String, String> map = (java.util.Map<String, String>) args[i];
+                    String username = map.get("username");
+                    if (StringUtils.hasText(username)) {
+                        auditLog.setUsername(username);
+                    }
+                    break;
+                }
+            }
+        }
+    } catch (Exception ignored) {
+    }
+}
+```
+
+### 修复后的状态判定优先级
+
+| 场景 | 返回值 | Result.code | 是否抛异常 | 最终 status | error_msg 来源 |
+|------|--------|------------|-----------|-----------|--------------|
+| 登录成功 | Result<LoginUserDTO> | 200 | 否 | 1 | - |
+| 用户名不存在 | Result<Void> | 10001 | 否 | 0 | Result.message（"用户名不存在"） |
+| 密码错误 | Result<Void> | 10002 | 否 | 0 | Result.message（"密码错误"） |
+| 账号被禁用 | Result<Void> | 10003 | 否 | 0 | Result.message（"账号已被禁用"） |
+| 系统异常（NPE 等） | - | - | 是 | 0 | Throwable.getMessage() |
+| 新增用户成功 | Result<Void> | 200 | 否 | 1 | - |
+| 新增用户失败（用户名已存在） | Result<Void> | 400 | 否 | 0 | Result.message |
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/src/main/java/com/example/usermanager/aspect/AuditLogAspect.java` | 1. 新增 `import com.example.usermanager.common.Result`<br>2. 状态判断改为基于 `Result.code == 200`<br>3. Result.error 时提取 `message` 写入 `error_msg`<br>4. LOGIN 操作失败时从参数中提取 `username` 字段（不提取密码） |
+
+---
+
+## 关键代码变更对比
+
+### 状态判断逻辑对比
+
+```java
+// ========== 修改前 ==========
+result = joinPoint.proceed();
+auditLog.setStatus(1);   // ❌ 盲目认为正常返回就是成功
+
+// ========== 修改后 ==========
+result = joinPoint.proceed();
+
+if (result instanceof Result<?> res) {
+    // ✅ 检查 Result.code，200 为成功，其他为失败
+    auditLog.setStatus(res.getCode() != null && res.getCode() == 200 ? 1 : 0);
+    if (res.getCode() == null || res.getCode() != 200) {
+        // ✅ 失败时提取错误信息写入 error_msg
+        String errorMsg = res.getMessage();
+        if (errorMsg != null && errorMsg.length() > 1000) {
+            errorMsg = errorMsg.substring(0, 1000);
+        }
+        auditLog.setErrorMsg(errorMsg);
+    }
+} else {
+    // ✅ 非 Result 类型的正常返回（向后兼容），视为成功
+    auditLog.setStatus(1);
+}
+```
+
+### 登录操作人信息补全对比
+
+```java
+// ========== 修改前 ==========
+// 仅从 JWT Token 和 SecurityContext 获取用户名
+// 登录失败时两者都为空 → auditLog.username = null
+
+// ========== 修改后 ==========
+// LOGIN 操作且 username 为空时，从参数中安全提取 username（不提取 password）
+if ("LOGIN".equals(auditLogAnnotation.operation()) && auditLog.getUsername() == null) {
+    try {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        String[] paramNames = signature.getParameterNames();
+        Object[] args = joinPoint.getArgs();
+        // 查找名为 loginData 的 Map 参数，只取 username
+        if (paramNames != null && args != null) {
+            for (int i = 0; i < paramNames.length; i++) {
+                if ("loginData".equals(paramNames[i]) && args[i] instanceof java.util.Map) {
+                    @SuppressWarnings("unchecked")
+                    java.util.Map<String, String> map = (java.util.Map<String, String>) args[i];
+                    String username = map.get("username");
+                    if (StringUtils.hasText(username)) {
+                        auditLog.setUsername(username);
+                    }
+                    break;
+                }
+            }
+        }
+    } catch (Exception ignored) {
+    }
+}
+```
+
+---
+
+## 验证方法
+
+### 一、登录场景验证
+
+| 测试用例 | 步骤 | 预期审计日志 status | 预期 error_msg | 预期 username |
+|---------|------|-------------------|---------------|--------------|
+| 正确用户名密码 | `curl -X POST /api/user/login -d '{"username":"admin","password":"123456"}'` | 1 | null | admin |
+| 用户不存在 | `curl -X POST /api/user/login -d '{"username":"notfound","password":"123456"}'` | 0 | 用户名不存在 | notfound |
+| 密码错误 | `curl -X POST /api/user/login -d '{"username":"admin","password":"wrong"}'` | 0 | 密码错误 | admin |
+| 账号禁用 | 先禁用 zhangsan，再 `curl -X POST /api/user/login -d '{"username":"zhangsan","password":"123456"}'` | 0 | 账号已被禁用，请联系管理员 | zhangsan |
+
+```sql
+-- 验证数据库数据
+SELECT
+    username,
+    operation,
+    status,
+    CASE status WHEN 1 THEN '成功' ELSE '失败' END AS status_text,
+    error_msg,
+    create_time
+FROM sys_audit_log
+WHERE operation = 'LOGIN'
+ORDER BY create_time DESC
+LIMIT 10;
+```
+
+### 二、其他业务场景验证
+
+| 测试用例 | 预期审计日志 status |
+|---------|-------------------|
+| 新增用户成功 | 1 |
+| 新增用户（用户名已存在） | 0，error_msg="用户名 'xxx' 已存在" |
+| 编辑用户成功 | 1 |
+| 切换用户状态成功 | 1 |
+| 切换管理员状态（被拒绝） | 0，error_msg="管理员账号不允许禁用" |
+| 删除用户成功 | 1 |
+| 分配角色成功 | 1 |
+
+### 三、前端审计日志页面验证
+
+1. 使用 admin 登录
+2. 故意输入错误密码登录一次
+3. 进入"操作审计"页面
+4. 验证：
+   - ✅ 错误密码的那条登录记录显示为红色"失败"标签
+   - ✅ 失败记录的详情弹窗中显示 error_msg 内容
+   - ✅ 失败记录的用户名正确显示为 admin
+   - ✅ 正常登录记录显示为绿色"成功"标签
+
+---
+
+## 问题预防建议
+
+### 1. 审计切面必须同时识别"异常失败"和"业务失败"
+
+在设计审计切面时，成功/失败判定逻辑必须覆盖以下所有路径：
+
+```
+        方法执行
+        /      \
+    抛异常    正常返回
+    (status=0)    /    \
+           返回值是 Result？
+           /        \
+         是         否（视为成功）
+        / \
+   code=200？
+   /    \
+  是     否
+(成功)  (失败)
+```
+
+### 2. 统一业务返回协议
+
+项目中所有 Controller 方法应**统一返回 `Result<?>`**，不允许混合返回其他类型（如 `String`、`Map` 等），便于切面进行统一的状态判定。如确有特殊返回类型，需在切面中显式处理。
+
+### 3. Result 错误码约定
+
+在 `Result.java` 或常量类中统一定义错误码：
+
+```java
+public class ResultCode {
+    public static final int SUCCESS = 200;
+    public static final int BAD_REQUEST = 400;
+    public static final int UNAUTHORIZED = 401;
+    public static final int FORBIDDEN = 403;
+    public static final int NOT_FOUND = 404;
+    // 业务错误码 1xxxx
+    public static final int USER_NOT_FOUND = 10001;
+    public static final int PASSWORD_ERROR = 10002;
+    public static final int ACCOUNT_DISABLED = 10003;
+}
+```
+
+切面判定使用：
+```java
+auditLog.setStatus(res.getCode() != null && res.getCode() == ResultCode.SUCCESS ? 1 : 0);
+```
+
+### 4. 登录失败场景必须记录操作人
+
+登录操作即使失败，也应记录尝试登录的用户名，便于安全审计（如暴力破解检测）。但**严禁记录密码字段**。
+
+推荐获取顺序：
+1. 登录成功 → 从返回的 LoginUserDTO 中获取（最准确，含 userId、nickname）
+2. 登录失败 → 从请求参数中仅提取 username 字段（安全，不触及 password）
+3. 兜底 → JWT Token / SecurityContext（登录时通常为空）
+
+### 5. 审计模块自测清单
+
+审计功能开发完成后，必须验证以下场景：
+
+| # | 测试场景 | 预期结果 |
+|---|---------|---------|
+| 1 | 操作成功，返回 Result.success() | status=1，error_msg=null |
+| 2 | 业务失败，返回 Result.error() | status=0，error_msg=Result.message |
+| 3 | 运行时异常抛出（如 NPE） | status=0，error_msg=异常消息 |
+| 4 | 登录成功 | username=正确用户，status=1 |
+| 5 | 登录失败（用户名不存在） | username=输入值，status=0，error_msg=错误信息 |
+| 6 | 登录失败（密码错误） | username=输入值，status=0，error_msg=错误信息 |
+| 7 | 请求参数中含敏感字段（password 等） | 未被记录到 params 或其他字段 |

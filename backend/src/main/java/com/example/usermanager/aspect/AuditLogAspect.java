@@ -2,6 +2,7 @@ package com.example.usermanager.aspect;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.usermanager.annotation.AuditLog;
+import com.example.usermanager.common.Result;
 import com.example.usermanager.entity.User;
 import com.example.usermanager.service.AuditLogService;
 import com.example.usermanager.service.UserService;
@@ -82,6 +83,28 @@ public class AuditLogAspect {
             }
         }
 
+        if ("LOGIN".equals(auditLogAnnotation.operation()) && auditLog.getUsername() == null) {
+            try {
+                MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+                String[] paramNames = signature.getParameterNames();
+                Object[] args = joinPoint.getArgs();
+                if (paramNames != null && args != null) {
+                    for (int i = 0; i < paramNames.length; i++) {
+                        if ("loginData".equals(paramNames[i]) && args[i] instanceof java.util.Map) {
+                            @SuppressWarnings("unchecked")
+                            java.util.Map<String, String> map = (java.util.Map<String, String>) args[i];
+                            String username = map.get("username");
+                            if (StringUtils.hasText(username)) {
+                                auditLog.setUsername(username);
+                            }
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
         if (auditLogAnnotation.recordParams()) {
             try {
                 MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -115,7 +138,19 @@ public class AuditLogAspect {
         Object result = null;
         try {
             result = joinPoint.proceed();
-            auditLog.setStatus(1);
+
+            if (result instanceof Result<?> res) {
+                auditLog.setStatus(res.getCode() != null && res.getCode() == 200 ? 1 : 0);
+                if (res.getCode() == null || res.getCode() != 200) {
+                    String errorMsg = res.getMessage();
+                    if (errorMsg != null && errorMsg.length() > 1000) {
+                        errorMsg = errorMsg.substring(0, 1000);
+                    }
+                    auditLog.setErrorMsg(errorMsg);
+                }
+            } else {
+                auditLog.setStatus(1);
+            }
 
             if (auditLogAnnotation.recordResult() && result != null) {
                 try {
