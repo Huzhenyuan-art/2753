@@ -6,6 +6,7 @@ import com.example.usermanager.annotation.AuditLog;
 import com.example.usermanager.common.Result;
 import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
+import com.example.usermanager.dto.RefreshTokenDTO;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
 import com.example.usermanager.entity.User;
@@ -58,6 +59,34 @@ public class UserController {
                     return Result.error(10003, "账号已被禁用，请联系管理员");
                 default:
                     return Result.error(401, "登录失败，请重试");
+            }
+        }
+    }
+
+    @PostMapping("/refresh")
+    @AuditLog(operation = "REFRESH_TOKEN", module = "用户管理", description = "刷新访问令牌", recordParams = false, recordResult = false)
+    public Result<RefreshTokenDTO> refreshToken(@RequestBody Map<String, String> body) {
+        String refreshToken = body.get("refreshToken");
+        try {
+            RefreshTokenDTO dto = userService.refreshToken(refreshToken);
+            return Result.success(dto);
+        } catch (RuntimeException e) {
+            String errorCode = e.getMessage();
+            switch (errorCode) {
+                case "REFRESH_TOKEN_MISSING":
+                    return Result.error(10010, "刷新令牌缺失");
+                case "REFRESH_TOKEN_INVALID":
+                    return Result.error(10011, "刷新令牌无效或已过期，请重新登录");
+                case "REFRESH_TOKEN_TYPE_ERROR":
+                    return Result.error(10012, "令牌类型错误，请使用刷新令牌");
+                case "USER_NOT_FOUND":
+                    return Result.error(10013, "用户不存在，请重新登录");
+                case "ACCOUNT_DISABLED":
+                    return Result.error(10014, "账号已被禁用，请联系管理员");
+                case "PASSWORD_CHANGED":
+                    return Result.error(10015, "密码已修改，请重新登录");
+                default:
+                    return Result.error(10016, "刷新令牌失败，请重新登录");
             }
         }
     }

@@ -13,18 +13,25 @@ import java.util.*;
 @Component
 public class JwtUtils {
 
+    public static final String TOKEN_TYPE_ACCESS = "access";
+    public static final String TOKEN_TYPE_REFRESH = "refresh";
+    public static final String CLAIM_TOKEN_TYPE = "tokenType";
+
     @Value("${jwt.secret}")
     private String secret;
 
-    @Value("${jwt.expiration}")
-    private long expiration;
+    @Value("${jwt.access-expiration}")
+    private long accessExpiration;
+
+    @Value("${jwt.refresh-expiration}")
+    private long refreshExpiration;
 
     private SecretKey getSigningKey() {
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
-    public String generateToken(String username, Long userId, List<String> roleCodes, List<String> permissionCodes) {
+    private String generateTokenInternal(String username, Long userId, List<String> roleCodes, List<String> permissionCodes, String tokenType, long expiration) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expiration);
 
@@ -32,6 +39,7 @@ public class JwtUtils {
         claims.put("userId", userId);
         claims.put("roles", roleCodes != null ? roleCodes : new ArrayList<>());
         claims.put("permissions", permissionCodes != null ? permissionCodes : new ArrayList<>());
+        claims.put(CLAIM_TOKEN_TYPE, tokenType);
 
         return Jwts.builder()
                 .claims(claims)
@@ -40,6 +48,36 @@ public class JwtUtils {
                 .expiration(expiryDate)
                 .signWith(getSigningKey())
                 .compact();
+    }
+
+    public String generateAccessToken(String username, Long userId, List<String> roleCodes, List<String> permissionCodes) {
+        return generateTokenInternal(username, userId, roleCodes, permissionCodes, TOKEN_TYPE_ACCESS, accessExpiration);
+    }
+
+    public String generateRefreshToken(String username, Long userId) {
+        return generateTokenInternal(username, userId, Collections.emptyList(), Collections.emptyList(), TOKEN_TYPE_REFRESH, refreshExpiration);
+    }
+
+    public String getTokenType(String token) {
+        Claims claims = parseClaims(token);
+        Object tokenType = claims.get(CLAIM_TOKEN_TYPE);
+        return tokenType != null ? tokenType.toString() : null;
+    }
+
+    public boolean isAccessToken(String token) {
+        return TOKEN_TYPE_ACCESS.equals(getTokenType(token));
+    }
+
+    public boolean isRefreshToken(String token) {
+        return TOKEN_TYPE_REFRESH.equals(getTokenType(token));
+    }
+
+    public long getAccessTokenExpiration() {
+        return accessExpiration;
+    }
+
+    public long getRefreshTokenExpiration() {
+        return refreshExpiration;
     }
 
     public String getUsernameFromToken(String token) {
@@ -51,6 +89,11 @@ public class JwtUtils {
         Claims claims = parseClaims(token);
         Object userId = claims.get("userId");
         return userId != null ? Long.valueOf(userId.toString()) : null;
+    }
+
+    public Date getExpirationFromToken(String token) {
+        Claims claims = parseClaims(token);
+        return claims.getExpiration();
     }
 
     @SuppressWarnings("unchecked")

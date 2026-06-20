@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
+import com.example.usermanager.dto.RefreshTokenDTO;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
 import com.example.usermanager.entity.User;
@@ -69,10 +70,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
         List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
 
-        String token = jwtUtils.generateToken(username, user.getId(), roleCodes, permissionCodes);
+        String accessToken = jwtUtils.generateAccessToken(username, user.getId(), roleCodes, permissionCodes);
+        String refreshToken = jwtUtils.generateRefreshToken(username, user.getId());
 
         LoginUserDTO dto = new LoginUserDTO();
-        dto.setToken(token);
+        dto.setToken(accessToken);
+        dto.setRefreshToken(refreshToken);
+        dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
+        dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
         dto.setUserId(user.getId());
         dto.setUsername(user.getUsername());
         dto.setNickname(user.getNickname());
@@ -85,6 +90,63 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         dto.setPermissions(permissions);
         dto.setRoleCodes(roleCodes);
         dto.setPermissionCodes(permissionCodes);
+
+        return dto;
+    }
+
+    @Override
+    public RefreshTokenDTO refreshToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.trim().isEmpty()) {
+            throw new RuntimeException("REFRESH_TOKEN_MISSING");
+        }
+
+        if (!jwtUtils.validateToken(refreshToken)) {
+            throw new RuntimeException("REFRESH_TOKEN_INVALID");
+        }
+
+        if (!jwtUtils.isRefreshToken(refreshToken)) {
+            throw new RuntimeException("REFRESH_TOKEN_TYPE_ERROR");
+        }
+
+        String username = jwtUtils.getUsernameFromToken(refreshToken);
+        Long userId = jwtUtils.getUserIdFromToken(refreshToken);
+
+        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) {
+            throw new RuntimeException("USER_NOT_FOUND");
+        }
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            throw new RuntimeException("ACCOUNT_DISABLED");
+        }
+        if (!user.getId().equals(userId)) {
+            throw new RuntimeException("REFRESH_TOKEN_INVALID");
+        }
+
+        if (user.getPasswordChangedAt() != null) {
+            java.time.LocalDateTime passwordChangedAt = user.getPasswordChangedAt();
+            java.util.Date tokenIssuedAt = jwtUtils.parseClaims(refreshToken).getIssuedAt();
+            if (tokenIssuedAt != null) {
+                java.time.LocalDateTime tokenIssuedDateTime = tokenIssuedAt.toInstant()
+                        .atZone(java.time.ZoneId.systemDefault()).toLocalDateTime();
+                if (tokenIssuedDateTime.isBefore(passwordChangedAt)) {
+                    throw new RuntimeException("PASSWORD_CHANGED");
+                }
+            }
+        }
+
+        List<Role> roles = roleService.getRolesByUserId(user.getId());
+        List<Permission> permissions = permissionService.getPermissionsByUserId(user.getId());
+        List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
+        List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
+
+        String newAccessToken = jwtUtils.generateAccessToken(username, user.getId(), roleCodes, permissionCodes);
+        String newRefreshToken = jwtUtils.generateRefreshToken(username, user.getId());
+
+        RefreshTokenDTO dto = new RefreshTokenDTO();
+        dto.setToken(newAccessToken);
+        dto.setRefreshToken(newRefreshToken);
+        dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
+        dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
 
         return dto;
     }

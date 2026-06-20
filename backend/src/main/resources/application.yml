@@ -31,4 +31,5 @@ mybatis-plus:
 
 jwt:
   secret: 9a4f2c8d3e5f1g7h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z
-  expiration: 86400000 # 24 hours
+  access-expiration: 3600000 # 1 hour for access token
+  refresh-expiration: 604800000 # 7 days for refresh token

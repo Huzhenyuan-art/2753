@@ -45,7 +45,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String path = request.getRequestURI();
-        if ("/api/health".equals(path) || "/api/user/login".equals(path)) {
+        if ("/api/health".equals(path) || "/api/user/login".equals(path) || "/api/user/refresh".equals(path)) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -53,6 +53,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = getJwtFromRequest(request);
 
         if (StringUtils.hasText(token) && jwtUtils.validateToken(token)) {
+            if (!jwtUtils.isAccessToken(token)) {
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json;charset=UTF-8");
+                Map<String, Object> result = new HashMap<>();
+                result.put("code", 401);
+                result.put("message", "令牌类型错误，请使用访问令牌");
+                result.put("data", null);
+                response.getWriter().write(objectMapper.writeValueAsString(result));
+                return;
+            }
+
             String username = jwtUtils.getUsernameFromToken(token);
             User user = userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
             if (user == null) {

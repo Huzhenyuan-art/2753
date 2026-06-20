@@ -4,6 +4,7 @@ import Home from '@/views/Home.vue'
 import Profile from '@/views/Profile.vue'
 import ChangePassword from '@/views/ChangePassword.vue'
 import AuditLog from '@/views/AuditLog.vue'
+import { getAccessToken } from '@/utils/token'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -42,9 +43,9 @@ const router = createRouter({
 })
 
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
+  const token = getAccessToken()
   if (to.meta.requiresAuth && !token) {
-    next('/login')
+    next({ path: '/login', query: { redirect: to.fullPath } })
   } else {
     next()
   }

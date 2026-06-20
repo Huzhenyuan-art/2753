@@ -43,13 +43,14 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import request from '@/utils/request'
 import { ElMessage } from 'element-plus'
 import { Warning } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 
 const loginForm = ref({ username: '', password: '' })
@@ -155,7 +156,8 @@ const handleLogin = async () => {
     }
     localStorage.removeItem('saved_login')
     ElMessage.success('登录成功')
-    router.push('/')
+    const redirect = route.query.redirect as string
+    router.push(redirect || '/')
   } catch (error: any) {
     console.error(error)
     handleLoginError(error)

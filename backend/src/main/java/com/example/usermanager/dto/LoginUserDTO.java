@@ -10,6 +10,9 @@ import java.util.List;
 @Data
 public class LoginUserDTO {
     private String token;
+    private String refreshToken;
+    private Long accessTokenExpiresIn;
+    private Long refreshTokenExpiresIn;
     private Long userId;
     private String username;
     private String nickname;

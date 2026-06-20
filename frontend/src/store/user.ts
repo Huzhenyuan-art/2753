@@ -1,5 +1,12 @@
 import { defineStore } from 'pinia'
 import request from '@/utils/request'
+import {
+  getAccessToken,
+  setTokens,
+  clearAllTokens,
+  parseJwt,
+  JwtPayload,
+} from '@/utils/token'
 
 interface RoleInfo {
   id: number
@@ -33,43 +40,32 @@ interface UserInfo {
   permissionCodes: string[]
 }
 
-function parseJwtPayload(token: string): any {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    return JSON.parse(atob(parts[1]))
-  } catch {
-    return null
-  }
-}
-
 export const useUserStore = defineStore('user', {
   state: () => ({
-    token: localStorage.getItem('token') || '',
-    userInfo: null as UserInfo | null
+    userInfo: null as UserInfo | null,
   }),
   getters: {
-    jwtUsername(state): string | null {
-      if (!state.token) return null
-      const payload = parseJwtPayload(state.token)
-      return payload?.sub || null
+    token(): string {
+      return getAccessToken()
     },
-    jwtUserId(state): number | null {
-      if (!state.token) return null
-      const payload = parseJwtPayload(state.token)
-      return payload?.userId || null
+    jwtPayload(): JwtPayload | null {
+      const token = getAccessToken()
+      if (!token) return null
+      return parseJwt(token)
+    },
+    jwtUsername(): string | null {
+      return this.jwtPayload?.sub || null
+    },
+    jwtUserId(): number | null {
+      return this.jwtPayload?.userId || null
     },
     roleCodes(state): string[] {
       if (state.userInfo?.roleCodes) return state.userInfo.roleCodes
-      if (!state.token) return []
-      const payload = parseJwtPayload(state.token)
-      return payload?.roles || []
+      return this.jwtPayload?.roles || []
     },
     permissionCodes(state): string[] {
       if (state.userInfo?.permissionCodes) return state.userInfo.permissionCodes
-      if (!state.token) return []
-      const payload = parseJwtPayload(state.token)
-      return payload?.permissions || []
+      return this.jwtPayload?.permissions || []
     },
     isAdmin(): boolean {
       return this.roleCodes.includes('ADMIN')
@@ -85,29 +81,46 @@ export const useUserStore = defineStore('user', {
         return state.userInfo.permissionCodes.includes(permissionCode)
       }
       return false
-    }
+    },
+    isLoggedIn(): boolean {
+      return !!getAccessToken()
+    },
   },
   actions: {
-    setToken(token: string) {
-      this.token = token
-      localStorage.setItem('token', token)
-    },
     setLoginData(data: any) {
-      this.token = data.token
-      localStorage.setItem('token', data.token)
+      const {
+        token,
+        refreshToken,
+        accessTokenExpiresIn,
+        userId,
+        username,
+        nickname,
+        email,
+        avatar,
+        status,
+        createTime,
+        updateTime,
+        roles,
+        permissions,
+        roleCodes,
+        permissionCodes,
+      } = data
+
+      setTokens(token, refreshToken, accessTokenExpiresIn)
+
       this.userInfo = {
-        userId: data.userId,
-        username: data.username,
-        nickname: data.nickname,
-        email: data.email,
-        avatar: data.avatar,
-        status: data.status,
-        createTime: data.createTime || '',
-        updateTime: data.updateTime || '',
-        roles: data.roles || [],
-        permissions: data.permissions || [],
-        roleCodes: data.roleCodes || [],
-        permissionCodes: data.permissionCodes || []
+        userId,
+        username,
+        nickname,
+        email,
+        avatar,
+        status,
+        createTime: createTime || '',
+        updateTime: updateTime || '',
+        roles: roles || [],
+        permissions: permissions || [],
+        roleCodes: roleCodes || [],
+        permissionCodes: permissionCodes || [],
       }
     },
     async fetchUserInfo() {
@@ -124,14 +137,13 @@ export const useUserStore = defineStore('user', {
       this.$patch({
         userInfo: {
           ...this.userInfo,
-          ...info
-        }
+          ...info,
+        },
       })
     },
     logout() {
-      this.token = ''
       this.userInfo = null
-      localStorage.removeItem('token')
-    }
-  }
+      clearAllTokens()
+    },
+  },
 })
