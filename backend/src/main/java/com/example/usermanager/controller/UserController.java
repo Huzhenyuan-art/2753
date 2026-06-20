@@ -7,9 +7,11 @@ import com.example.usermanager.common.Result;
 import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.dto.RefreshTokenDTO;
+import com.example.usermanager.entity.Dept;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
 import com.example.usermanager.entity.User;
+import com.example.usermanager.service.DeptService;
 import com.example.usermanager.service.PermissionService;
 import com.example.usermanager.service.RoleService;
 import com.example.usermanager.service.UserService;
@@ -36,6 +38,9 @@ public class UserController {
 
     @Autowired
     private PermissionService permissionService;
+
+    @Autowired
+    private DeptService deptService;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -95,7 +100,8 @@ public class UserController {
     public Result<Page<User>> list(@RequestParam(defaultValue = "1") Integer pageNum,
                                  @RequestParam(defaultValue = "10") Integer pageSize,
                                  @RequestParam(required = false) String username,
-                                 @RequestParam(required = false) Integer status) {
+                                 @RequestParam(required = false) Integer status,
+                                 @RequestParam(required = false) Long deptId) {
         Page<User> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         if (StringUtils.hasText(username)) {
@@ -105,7 +111,7 @@ public class UserController {
             wrapper.eq(User::getStatus, status);
         }
         wrapper.orderByDesc(User::getCreateTime);
-        return Result.success(userService.page(page, wrapper));
+        return Result.success(userService.pageWithDept(page, wrapper, deptId));
     }
 
     @PutMapping("/{id}/status")
@@ -128,13 +134,16 @@ public class UserController {
 
     @PostMapping
     @AuditLog(operation = "CREATE", module = "用户管理", description = "新增用户")
-    public Result<String> add(@Valid @RequestBody User user) {
+    public Result<Long> add(@Valid @RequestBody User user) {
         if (userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, user.getUsername())) != null) {
             return Result.error(400, "用户名 '" + user.getUsername() + "' 已存在");
         }
         user.setPassword(passwordEncoder.encode(user.getPassword()));
         userService.save(user);
-        return Result.success();
+        if (user.getDeptIds() != null && !user.getDeptIds().isEmpty()) {
+            deptService.assignDepts(user.getId(), user.getDeptIds());
+        }
+        return Result.success(user.getId());
     }
 
     @PutMapping
@@ -151,6 +160,9 @@ public class UserController {
             user.setPassword(null);
         }
         userService.updateById(user);
+        if (user.getDeptIds() != null) {
+            deptService.assignDepts(user.getId(), user.getDeptIds());
+        }
         return Result.success();
     }
 
@@ -206,6 +218,8 @@ public class UserController {
         List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
         List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
 
+        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+
         LoginUserDTO dto = new LoginUserDTO();
         dto.setUserId(user.getId());
         dto.setUsername(user.getUsername());
@@ -219,6 +233,7 @@ public class UserController {
         dto.setPermissions(permissions);
         dto.setRoleCodes(roleCodes);
         dto.setPermissionCodes(permissionCodes);
+        dto.setDepts(depts);
         return Result.success(dto);
     }
 

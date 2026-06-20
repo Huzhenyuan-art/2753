@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '@/views/Login.vue'
 import Home from '@/views/Home.vue'
+import Dept from '@/views/Dept.vue'
 import Profile from '@/views/Profile.vue'
 import ChangePassword from '@/views/ChangePassword.vue'
 import AuditLog from '@/views/AuditLog.vue'
@@ -20,6 +21,12 @@ const router = createRouter({
       name: 'Home',
       component: Home,
       meta: { title: '用户管理', requiresAuth: true }
+    },
+    {
+      path: '/dept',
+      name: 'Dept',
+      component: Dept,
+      meta: { title: '部门管理', requiresAuth: true }
     },
     {
       path: '/audit-log',

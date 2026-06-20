@@ -25,4 +25,5 @@ public class LoginUserDTO {
     private List<Permission> permissions;
     private List<String> roleCodes;
     private List<String> permissionCodes;
+    private List<com.example.usermanager.entity.Dept> depts;
 }

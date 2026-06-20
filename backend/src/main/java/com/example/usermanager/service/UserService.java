@@ -18,4 +18,9 @@ public interface UserService extends IService<User> {
     void assignRoles(Long userId, List<Long> roleIds);
 
     List<Long> getUserRoleIds(Long userId);
+
+    com.baomidou.mybatisplus.extension.plugins.pagination.Page<User> pageWithDept(
+            com.baomidou.mybatisplus.extension.plugins.pagination.Page<User> page,
+            com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User> wrapper,
+            Long deptId);
 }

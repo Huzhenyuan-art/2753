@@ -1,16 +1,21 @@
 package com.example.usermanager.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.dto.RefreshTokenDTO;
+import com.example.usermanager.entity.Dept;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
 import com.example.usermanager.entity.User;
+import com.example.usermanager.entity.UserDept;
 import com.example.usermanager.entity.UserRole;
+import com.example.usermanager.mapper.UserDeptMapper;
 import com.example.usermanager.mapper.UserMapper;
 import com.example.usermanager.mapper.UserRoleMapper;
+import com.example.usermanager.service.DeptService;
 import com.example.usermanager.service.PermissionService;
 import com.example.usermanager.service.RoleService;
 import com.example.usermanager.service.UserService;
@@ -26,11 +31,19 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
+
+    @Autowired
+    private UserDeptMapper userDeptMapper;
+
+    @Autowired
+    @Lazy
+    private DeptService deptService;
 
     @Autowired
     @Lazy
@@ -148,11 +161,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
         dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
 
+        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+        dto.setDepts(depts);
+
         return dto;
     }
 
     @Override
-    @Transactional
     public void changePassword(String username, ChangePasswordDTO dto) {
         if (!dto.getNewPassword().equals(dto.getConfirmPassword())) {
             throw new RuntimeException("CONFIRM_PASSWORD_MISMATCH");
@@ -229,5 +244,50 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return new ArrayList<>();
         }
         return userRoles.stream().map(UserRole::getRoleId).collect(Collectors.toList());
+    }
+
+    @Override
+    public Page<User> pageWithDept(Page<User> page, LambdaQueryWrapper<User> wrapper, Long deptId) {
+        if (deptId != null) {
+            List<Long> deptIds = deptService.getChildDeptIds(deptId);
+            List<UserDept> userDepts = userDeptMapper.selectList(
+                    new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
+            if (userDepts != null && !userDepts.isEmpty()) {
+                List<Long> userIds = userDepts.stream()
+                        .map(UserDept::getUserId)
+                        .distinct()
+                        .collect(Collectors.toList());
+                wrapper.in(User::getId, userIds);
+            } else {
+                wrapper.in(User::getId, new ArrayList<>());
+            }
+        }
+
+        Page<User> resultPage = this.page(page, wrapper);
+        List<User> records = resultPage.getRecords();
+        if (records != null && !records.isEmpty()) {
+            List<Long> userIds = records.stream().map(User::getId).collect(Collectors.toList());
+            List<UserDept> allUserDepts = userDeptMapper.selectList(
+                    new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
+            List<Long> allDeptIds = allUserDepts.stream()
+                    .map(UserDept::getDeptId)
+                    .distinct()
+                    .collect(Collectors.toList());
+            List<Dept> allDepts = deptService.listByIds(allDeptIds);
+            Map<Long, Dept> deptMap = allDepts.stream()
+                    .collect(Collectors.toMap(Dept::getId, dept -> dept));
+            Map<Long, List<Dept>> userDeptMap = allUserDepts.stream()
+                    .collect(Collectors.groupingBy(
+                            UserDept::getUserId,
+                            Collectors.mapping(
+                                    ud -> deptMap.get(ud.getDeptId()),
+                                    Collectors.toList()
+                            )
+                    ));
+            for (User user : records) {
+                user.setDepts(userDeptMap.getOrDefault(user.getId(), new ArrayList<>()));
+            }
+        }
+        return resultPage;
     }
 }

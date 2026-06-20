@@ -25,6 +25,21 @@ interface PermissionInfo {
   status: number
 }
 
+interface DeptInfo {
+  id: number
+  name: string
+  code: string
+  parentId: number
+  sortOrder: number
+  leader: string
+  phone: string
+  email: string
+  status: number
+  createTime: string
+  updateTime: string
+  children?: DeptInfo[]
+}
+
 interface UserInfo {
   userId: number
   username: string
@@ -38,6 +53,7 @@ interface UserInfo {
   permissions: PermissionInfo[]
   roleCodes: string[]
   permissionCodes: string[]
+  depts: DeptInfo[]
 }
 
 export const useUserStore = defineStore('user', {
@@ -106,6 +122,8 @@ export const useUserStore = defineStore('user', {
         permissionCodes,
       } = data
 
+      const depts = data.depts
+
       setTokens(token, refreshToken, accessTokenExpiresIn)
 
       this.userInfo = {
@@ -121,6 +139,7 @@ export const useUserStore = defineStore('user', {
         permissions: permissions || [],
         roleCodes: roleCodes || [],
         permissionCodes: permissionCodes || [],
+        depts: depts || [],
       }
     },
     async fetchUserInfo() {

@@ -9,6 +9,9 @@
           </div>
         </div>
         <div class="header-right">
+          <el-button type="primary" text @click="goDept">
+            <el-icon><OfficeBuilding /></el-icon>部门管理
+          </el-button>
           <div class="current-roles" v-if="userStore.userInfo?.roles?.length">
             <el-tag v-for="role in userStore.userInfo.roles" :key="role.id" type="primary" effect="light" round class="role-tag">
               {{ role.name }}
@@ -41,42 +44,82 @@
       </el-header>
 
       <el-main class="content-area">
-        <div class="page-header">
-          <div class="title-section">
-            <h2 class="page-title">人员名单</h2>
-            <p class="page-desc">管理系统中的所有用户信息及权限设置</p>
+        <div class="main-content">
+          <div class="dept-sidebar glass-panel">
+            <div class="sidebar-header">
+              <h3 class="sidebar-title">
+                <el-icon><OfficeBuilding /></el-icon>
+                组织架构
+              </h3>
+              <el-button 
+                type="primary" 
+                text 
+                size="small" 
+                @click="deptFilter = undefined"
+                :disabled="deptFilter === undefined"
+              >
+                全部
+              </el-button>
+            </div>
+            <el-tree
+              :data="deptTree"
+              :props="{ label: 'name', children: 'children' }"
+              node-key="id"
+              default-expand-all
+              highlight-current
+              :current-node-key="deptFilter"
+              @node-click="handleDeptNodeClick"
+              class="dept-tree"
+            >
+              <template #default="{ node, data }">
+                <div class="tree-node-content">
+                  <el-icon v-if="data.status === 1" class="node-icon active"><OfficeBuilding /></el-icon>
+                  <el-icon v-else class="node-icon inactive"><OfficeBuilding /></el-icon>
+                  <span :class="{ 'text-muted': data.status === 0 }">{{ data.name }}</span>
+                </div>
+              </template>
+            </el-tree>
           </div>
-          <div class="action-section">
-            <el-button v-if="canAdd" type="primary" class="add-btn" @click="handleAdd">
-              <el-icon><Plus /></el-icon> 新增用户
-            </el-button>
-          </div>
-        </div>
 
-        <div class="filters-card glass-panel">
-          <el-input
-            v-model="searchQuery"
-            placeholder="用户名"
-            clearable
-            @clear="fetchData"
-            class="search-bar"
-          >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
-          <el-select
-            v-model="statusFilter"
-            placeholder="状态"
-            clearable
-            @clear="fetchData"
-            class="status-filter"
-          >
-            <el-option label="正常" :value="1" />
-            <el-option label="禁用" :value="0" />
-          </el-select>
-          <el-button @click="fetchData" class="search-btn">查询</el-button>
-        </div>
+          <div class="user-main">
+            <div class="page-header">
+              <div class="title-section">
+                <h2 class="page-title">
+                  {{ currentDeptName ? currentDeptName + ' - ' : '' }}人员名单
+                </h2>
+                <p class="page-desc">管理系统中的所有用户信息及权限设置</p>
+              </div>
+              <div class="action-section">
+                <el-button v-if="canAdd" type="primary" class="add-btn" @click="handleAdd">
+                  <el-icon><Plus /></el-icon> 新增用户
+                </el-button>
+              </div>
+            </div>
+
+            <div class="filters-card glass-panel">
+              <el-input
+                v-model="searchQuery"
+                placeholder="用户名"
+                clearable
+                @clear="fetchData"
+                class="search-bar"
+              >
+                <template #prefix>
+                  <el-icon><Search /></el-icon>
+                </template>
+              </el-input>
+              <el-select
+                v-model="statusFilter"
+                placeholder="状态"
+                clearable
+                @clear="fetchData"
+                class="status-filter"
+              >
+                <el-option label="正常" :value="1" />
+                <el-option label="禁用" :value="0" />
+              </el-select>
+              <el-button @click="fetchData" class="search-btn">查询</el-button>
+            </div>
 
         <div class="table-container glass-panel">
           <el-table 
@@ -98,6 +141,14 @@
             </el-table-column>
             <el-table-column prop="nickname" label="姓名" min-width="120" />
             <el-table-column prop="email" label="电子邮箱" min-width="180" />
+            <el-table-column label="部门" min-width="180">
+              <template #default="{ row }">
+                <el-tag v-if="row.depts && row.depts.length" v-for="dept in row.depts" :key="dept.id" type="info" effect="light" round class="role-tag-inline">
+                  {{ dept.name }}
+                </el-tag>
+                <span v-else class="no-role">未分配</span>
+              </template>
+            </el-table-column>
             <el-table-column label="角色" min-width="160">
               <template #default="{ row }">
                 <el-tag v-if="row._roles && row._roles.length" v-for="role in row._roles" :key="role.id" type="success" effect="light" round class="role-tag-inline">
@@ -169,6 +220,8 @@
               @size-change="handleSizeChange"
             />
           </div>
+        </div>
+        </div>
         </div>
       </el-main>
     </el-container>
@@ -249,6 +302,34 @@
         </el-form-item>
         <el-form-item label="电子邮箱" prop="email">
           <el-input v-model="userForm.email" placeholder="example@domain.com" />
+        </el-form-item>
+        <el-form-item label="所属部门">
+          <div class="dept-select-wrapper">
+            <el-tree-select
+              v-model="userForm.deptIds"
+              :data="deptTree"
+              :props="{ label: 'name', value: 'id', children: 'children', disabled: (d: any) => d.status === 0 }"
+              placeholder="请选择所属部门"
+              clearable
+              multiple
+              collapse-tags
+              :collapse-tags-tooltip="true"
+              style="width: 100%"
+            />
+          </div>
+          <div v-if="userForm.deptIds && userForm.deptIds.length" class="dept-hierarchy">
+            <div class="hierarchy-title">
+              <el-icon><Connection /></el-icon>
+              组织层级：
+            </div>
+            <div class="hierarchy-paths">
+              <div v-for="(path, idx) in deptHierarchyPaths" :key="idx" class="hierarchy-path">
+                <el-tag v-for="(item, i) in path" :key="item.id" :type="i === path.length - 1 ? 'primary' : 'info'" effect="light" size="small">
+                  {{ item.name }}
+                </el-tag>
+              </div>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="账号状态" prop="status">
           <el-radio-group v-model="userForm.status">
@@ -349,9 +430,10 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete } from '@element-plus/icons-vue'
+import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete, OfficeBuilding, Connection } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
+import type { DeptInfo } from '@/store/user'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -394,6 +476,59 @@ interface RoleOption {
 
 const allRoles = ref<RoleOption[]>([])
 
+const deptTree = ref<DeptInfo[]>([])
+const deptFilter = ref<number | undefined>(undefined)
+const deptLoading = ref(false)
+
+const currentDeptName = computed(() => {
+  if (deptFilter.value === undefined) return ''
+  const findDept = (list: DeptInfo[], id: number): DeptInfo | null => {
+    for (const dept of list) {
+      if (dept.id === id) return dept
+      if (dept.children) {
+        const found = findDept(dept.children, id)
+        if (found) return found
+      }
+    }
+    return null
+  }
+  const dept = findDept(deptTree.value, deptFilter.value)
+  return dept?.name || ''
+})
+
+const deptMap = computed(() => {
+  const map = new Map<number, DeptInfo>()
+  const buildMap = (list: DeptInfo[]) => {
+    for (const dept of list) {
+      map.set(dept.id, dept)
+      if (dept.children) {
+        buildMap(dept.children)
+      }
+    }
+  }
+  buildMap(deptTree.value)
+  return map
+})
+
+const deptHierarchyPaths = computed(() => {
+  if (!userForm.value.deptIds || !userForm.value.deptIds.length) return []
+  const paths: DeptInfo[][] = []
+  for (const deptId of userForm.value.deptIds) {
+    const path: DeptInfo[] = []
+    let currentId: number | undefined = deptId
+    while (currentId) {
+      const dept = deptMap.value.get(currentId)
+      if (!dept) break
+      path.unshift(dept)
+      currentId = dept.parentId || undefined
+    }
+    if (path.length) {
+      paths.push(path)
+    }
+  }
+  return paths
+})
+
 const userList = ref<any[]>([])
 const total = ref(0)
 const pageNum = ref(1)
@@ -428,7 +563,8 @@ const userForm = ref<any>({
   email: '',
   avatar: '',
   status: 1,
-  roleIds: [] as number[]
+  roleIds: [] as number[],
+  deptIds: [] as number[]
 })
 
 const avatarPreview = ref('')
@@ -635,6 +771,18 @@ const fetchAllRoles = async () => {
   }
 }
 
+const fetchDeptTree = async () => {
+  deptLoading.value = true
+  try {
+    const res: any = await request.get('/dept/tree')
+    deptTree.value = res.data || []
+  } catch (e) {
+    deptTree.value = []
+  } finally {
+    deptLoading.value = false
+  }
+}
+
 const loadUserRoles = async (userId: number) => {
   try {
     const res: any = await request.get(`/user/${userId}/roles`)
@@ -642,6 +790,21 @@ const loadUserRoles = async (userId: number) => {
   } catch (e) {
     return []
   }
+}
+
+const loadUserDepts = async (userId: number) => {
+  try {
+    const res: any = await request.get(`/dept/user/${userId}/ids`)
+    return res.data || []
+  } catch (e) {
+    return []
+  }
+}
+
+const handleDeptNodeClick = (data: any) => {
+  deptFilter.value = data.id
+  pageNum.value = 1
+  fetchData()
 }
 
 const fetchData = async () => {
@@ -655,12 +818,11 @@ const fetchData = async () => {
     if (statusFilter.value !== undefined && statusFilter.value !== null) {
       params.status = statusFilter.value
     }
+    if (deptFilter.value !== undefined) {
+      params.deptId = deptFilter.value
+    }
     const res: any = await request.get('/user/list', { params })
     const list = res.data.records || []
-    const roleMap = new Map<number, RoleOption[]>()
-    for (const role of allRoles.value) {
-      roleMap.set(role.id, [])
-    }
     for (const row of list) {
       row._roles = []
       try {
@@ -686,7 +848,18 @@ const handleSizeChange = (size: number) => {
 const handleAdd = () => {
   dialogMode.value = 'add'
   dialogTitle.value = '新增用户档案'
-  userForm.value = { id: undefined, username: '', password: '', confirmPassword: '', nickname: '', email: '', avatar: '', status: 1, roleIds: [] }
+  userForm.value = { 
+    id: undefined, 
+    username: '', 
+    password: '', 
+    confirmPassword: '', 
+    nickname: '', 
+    email: '', 
+    avatar: '', 
+    status: 1, 
+    roleIds: [],
+    deptIds: deptFilter.value ? [deptFilter.value] : []
+  }
   avatarPreview.value = ''
   avatarFile.value = null
   usernameCheckStatus.value = 'idle'
@@ -744,13 +917,15 @@ const handleEdit = async (row: any) => {
   dialogMode.value = 'edit'
   dialogTitle.value = '编辑用户档案'
   let roleIds: number[] = []
+  let deptIds: number[] = []
   if (canEditRole.value) {
     roleIds = await loadUserRoles(row.id)
   }
+  deptIds = await loadUserDepts(row.id)
   if (dialogMode.value !== 'edit') {
     return
   }
-  userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
+  userForm.value = { ...row, password: '', confirmPassword: '', roleIds, deptIds }
   avatarPreview.value = ''
   avatarFile.value = null
   usernameCheckStatus.value = 'idle'
@@ -928,6 +1103,10 @@ const goAuditLog = () => {
   router.push('/audit-log')
 }
 
+const goDept = () => {
+  router.push('/dept')
+}
+
 const handleLogout = () => {
   userStore.logout()
   router.push('/login')
@@ -940,6 +1119,7 @@ const formatDate = (dateStr: string) => {
 
 onMounted(async () => {
   await fetchAllRoles()
+  await fetchDeptTree()
   if (canList.value) {
     fetchData()
   }
@@ -1398,5 +1578,117 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 500;
   margin-top: -4px;
+}
+
+.main-content {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.dept-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  padding: 20px;
+  max-height: calc(100vh - 180px);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.dept-tree {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.tree-node-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.node-icon {
+  font-size: 16px;
+}
+
+.node-icon.active {
+  color: #3b82f6;
+}
+
+.node-icon.inactive {
+  color: #94a3b8;
+}
+
+.user-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.dept-select-wrapper {
+  margin-bottom: 8px;
+}
+
+.dept-hierarchy {
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.hierarchy-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
+.hierarchy-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hierarchy-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.text-muted {
+  color: #94a3b8;
+}
+
+@media (max-width: 1024px) {
+  .main-content {
+    flex-direction: column;
+  }
+  
+  .dept-sidebar {
+    width: 100%;
+    max-height: 300px;
+  }
 }
 </style>
