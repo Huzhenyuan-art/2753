@@ -2,6 +2,7 @@ package com.example.usermanager.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.usermanager.annotation.AuditLog;
 import com.example.usermanager.common.Result;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.entity.Permission;
@@ -38,6 +39,7 @@ public class UserController {
     private PasswordEncoder passwordEncoder;
 
     @PostMapping("/login")
+    @AuditLog(operation = "LOGIN", module = "用户管理", description = "用户登录", recordParams = false, recordResult = false)
     public Result<LoginUserDTO> login(@RequestBody Map<String, String> loginData) {
         String username = loginData.get("username");
         String password = loginData.get("password");
@@ -77,6 +79,7 @@ public class UserController {
     }
 
     @PutMapping("/{id}/status")
+    @AuditLog(operation = "STATUS", module = "用户管理", description = "切换用户状态")
     public Result<String> updateStatus(@PathVariable Long id, @RequestParam Integer status) {
         User user = userService.getById(id);
         if (user == null) {
@@ -94,6 +97,7 @@ public class UserController {
     }
 
     @PostMapping
+    @AuditLog(operation = "CREATE", module = "用户管理", description = "新增用户")
     public Result<String> add(@Valid @RequestBody User user) {
         if (userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, user.getUsername())) != null) {
             return Result.error(400, "用户名 '" + user.getUsername() + "' 已存在");
@@ -104,6 +108,7 @@ public class UserController {
     }
 
     @PutMapping
+    @AuditLog(operation = "UPDATE", module = "用户管理", description = "编辑用户")
     public Result<String> update(@Valid @RequestBody User user) {
         User existingUser = userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, user.getUsername()));
         if (existingUser != null && !existingUser.getId().equals(user.getId())) {
@@ -120,6 +125,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{id}")
+    @AuditLog(operation = "DELETE", module = "用户管理", description = "删除用户")
     public Result<String> delete(@PathVariable Long id) {
         User user = userService.getById(id);
         if (user != null && "admin".equals(user.getUsername())) {
@@ -164,6 +170,7 @@ public class UserController {
     }
 
     @PutMapping("/{id}/roles")
+    @AuditLog(operation = "ASSIGN_ROLE", module = "用户管理", description = "分配用户角色")
     public Result<String> assignRoles(@PathVariable Long id, @RequestBody Map<String, List<Long>> body) {
         List<Long> roleIds = body.get("roleIds");
         userService.assignRoles(id, roleIds);

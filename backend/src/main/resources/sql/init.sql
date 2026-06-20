@@ -78,7 +78,8 @@ INSERT IGNORE INTO sys_permission (name, code, type, description) VALUES
 ('新增用户', 'user:add', 'BUTTON', '新增用户权限'),
 ('编辑用户', 'user:edit', 'BUTTON', '编辑用户权限'),
 ('删除用户', 'user:delete', 'BUTTON', '删除用户权限'),
-('切换用户状态', 'user:status', 'BUTTON', '启用/禁用用户权限');
+('切换用户状态', 'user:status', 'BUTTON', '启用/禁用用户权限'),
+('查看审计日志', 'audit:list', 'BUTTON', '查看操作审计日志权限');
 
 -- Seed Role-Permission Association
 -- ADMIN 拥有所有权限
@@ -107,3 +108,26 @@ SELECT u.id, r.id FROM sys_user u, sys_role r WHERE u.username = 'zhangsan' AND 
 -- lisi -> VIEWER
 INSERT IGNORE INTO sys_user_role (user_id, role_id)
 SELECT u.id, r.id FROM sys_user u, sys_role r WHERE u.username = 'lisi' AND r.code = 'VIEWER';
+
+-- Audit Log Table
+CREATE TABLE IF NOT EXISTS sys_audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    user_id BIGINT COMMENT '操作人ID',
+    username VARCHAR(50) COMMENT '操作人用户名',
+    nickname VARCHAR(50) COMMENT '操作人昵称',
+    operation VARCHAR(50) NOT NULL COMMENT '操作类型：LOGIN-登录，CREATE-新增，UPDATE-编辑，DELETE-删除，STATUS-状态变更，ASSIGN_ROLE-分配角色',
+    module VARCHAR(50) COMMENT '操作模块',
+    description VARCHAR(500) COMMENT '操作描述',
+    method VARCHAR(200) COMMENT '请求方法',
+    params TEXT COMMENT '请求参数',
+    result TEXT COMMENT '返回结果',
+    ip VARCHAR(50) COMMENT 'IP地址',
+    status TINYINT DEFAULT 1 COMMENT '操作状态：1-成功，0-失败',
+    error_msg VARCHAR(1000) COMMENT '错误信息',
+    cost_time BIGINT COMMENT '耗时（毫秒）',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+    INDEX idx_user_id (user_id),
+    INDEX idx_username (username),
+    INDEX idx_operation (operation),
+    INDEX idx_create_time (create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='操作审计日志表';

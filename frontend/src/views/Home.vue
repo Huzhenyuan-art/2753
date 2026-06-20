@@ -14,6 +14,9 @@
               {{ role.name }}
             </el-tag>
           </div>
+          <el-button v-if="canViewAudit" type="primary" text @click="goAuditLog">
+            <el-icon><Notebook /></el-icon>操作审计
+          </el-button>
           <el-dropdown trigger="click">
             <div class="user-profile">
               <el-avatar :size="32" :src="resolveAvatarUrl(userStore.userInfo?.avatar)" />
@@ -246,7 +249,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { Upload, Notebook } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 
@@ -261,6 +264,7 @@ const canEdit = computed(() => userStore.hasPermission('user:edit') || userStore
 const canDelete = computed(() => userStore.hasPermission('user:delete') || userStore.isAdmin)
 const canChangeStatus = computed(() => userStore.hasPermission('user:status') || userStore.isAdmin)
 const canEditRole = computed(() => userStore.isAdmin)
+const canViewAudit = computed(() => userStore.hasPermission('audit:list') || userStore.isAdmin)
 
 const hasAnyAction = computed(() => canEdit.value || canDelete.value || canChangeStatus.value || canEditRole.value)
 const actionColumnWidth = computed(() => {
@@ -548,6 +552,10 @@ const confirmDelete = (row: any) => {
 
 const goProfile = () => {
   router.push('/profile')
+}
+
+const goAuditLog = () => {
+  router.push('/audit-log')
 }
 
 const handleLogout = () => {

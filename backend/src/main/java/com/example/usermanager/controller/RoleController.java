@@ -1,6 +1,7 @@
 package com.example.usermanager.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.usermanager.annotation.AuditLog;
 import com.example.usermanager.common.Result;
 import com.example.usermanager.entity.Role;
 import com.example.usermanager.service.RoleService;
@@ -32,6 +33,7 @@ public class RoleController {
     }
 
     @PostMapping
+    @AuditLog(operation = "CREATE", module = "角色管理", description = "新增角色")
     public Result<String> add(@Valid @RequestBody Role role) {
         if (roleService.getOne(new LambdaQueryWrapper<Role>().eq(Role::getCode, role.getCode())) != null) {
             return Result.error(400, "角色编码已存在");
@@ -41,6 +43,7 @@ public class RoleController {
     }
 
     @PutMapping
+    @AuditLog(operation = "UPDATE", module = "角色管理", description = "编辑角色")
     public Result<String> update(@Valid @RequestBody Role role) {
         Role existing = roleService.getOne(new LambdaQueryWrapper<Role>().eq(Role::getCode, role.getCode()));
         if (existing != null && !existing.getId().equals(role.getId())) {
@@ -51,6 +54,7 @@ public class RoleController {
     }
 
     @DeleteMapping("/{id}")
+    @AuditLog(operation = "DELETE", module = "角色管理", description = "删除角色")
     public Result<String> delete(@PathVariable Long id) {
         roleService.removeById(id);
         return Result.success();
