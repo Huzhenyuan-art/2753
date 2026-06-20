@@ -196,6 +196,21 @@
         </el-form-item>
         <el-form-item label="登录密码" prop="password" :rules="userForm.id ? [] : userRules.password">
           <el-input v-model="userForm.password" type="password" show-password placeholder="长度需在 6-20 位之间" />
+          <div v-if="!userForm.id && userForm.password" class="password-strength">
+            <div class="strength-bar">
+              <div 
+                class="strength-fill" 
+                :class="passwordStrength.level"
+                :style="{ width: passwordStrength.percent + '%' }"
+              ></div>
+            </div>
+            <span class="strength-text" :class="passwordStrength.level">
+              {{ passwordStrength.text }}
+            </span>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="!userForm.id" label="确认密码" prop="confirmPassword">
+          <el-input v-model="userForm.confirmPassword" type="password" show-password placeholder="请再次输入密码" />
         </el-form-item>
         <el-form-item label="姓名 / 昵称" prop="nickname">
           <el-input v-model="userForm.nickname" placeholder="显示的真实姓名" />
@@ -228,7 +243,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
@@ -291,6 +306,7 @@ const userForm = ref<any>({
   id: undefined,
   username: '',
   password: '',
+  confirmPassword: '',
   nickname: '',
   email: '',
   avatar: '',
@@ -301,9 +317,40 @@ const userForm = ref<any>({
 const avatarPreview = ref('')
 const avatarFile = ref<File | null>(null)
 
+const passwordStrength = computed(() => {
+  const pwd = userForm.value.password || ''
+  let score = 0
+  if (pwd.length >= 6) score += 1
+  if (pwd.length >= 10) score += 1
+  if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) score += 1
+  if (/\d/.test(pwd)) score += 1
+  if (/[!@#$%^&*(),.?":{}|<>_\-+=\[\]\/'`~]/.test(pwd)) score += 1
+
+  if (score <= 1) return { level: 'weak', text: '弱', percent: 25 }
+  if (score <= 2) return { level: 'medium', text: '中', percent: 50 }
+  if (score <= 3) return { level: 'strong', text: '强', percent: 75 }
+  return { level: 'very-strong', text: '非常强', percent: 100 }
+})
+
+const validateConfirmPassword = (_rule: any, value: string, callback: any) => {
+  if (!value) {
+    callback(new Error('请再次输入密码'))
+  } else if (value !== userForm.value.password) {
+    callback(new Error('两次输入的密码不一致'))
+  } else {
+    callback()
+  }
+}
+
 const userRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }, { min: 6, max: 20, message: '密码长度在 6 到 20 个字符', trigger: 'blur' }],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, max: 20, message: '密码长度在 6 到 20 个字符', trigger: 'blur' }
+  ],
+  confirmPassword: [
+    { validator: validateConfirmPassword, trigger: 'blur' }
+  ],
   nickname: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }, { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }]
 }
@@ -361,7 +408,7 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   dialogTitle.value = '新增用户档案'
-  userForm.value = { id: undefined, username: '', password: '', nickname: '', email: '', avatar: '', status: 1, roleIds: [] }
+  userForm.value = { id: undefined, username: '', password: '', confirmPassword: '', nickname: '', email: '', avatar: '', status: 1, roleIds: [] }
   avatarPreview.value = ''
   avatarFile.value = null
   dialogVisible.value = true
@@ -402,11 +449,17 @@ const handleEdit = async (row: any) => {
   if (canEditRole.value) {
     roleIds = await loadUserRoles(row.id)
   }
-  userForm.value = { ...row, password: '', roleIds }
+  userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
   avatarPreview.value = ''
   avatarFile.value = null
   dialogVisible.value = true
 }
+
+watch(() => userForm.value.password, () => {
+  if (userForm.value.confirmPassword) {
+    userFormRef.value?.validateField('confirmPassword')
+  }
+})
 
 const handleAssignRole = async (row: any) => {
   if (!canEditRole.value) {
@@ -415,7 +468,7 @@ const handleAssignRole = async (row: any) => {
   }
   dialogTitle.value = `分配角色 - ${row.nickname || row.username}`
   const roleIds = await loadUserRoles(row.id)
-  userForm.value = { ...row, password: '', roleIds }
+  userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
   avatarPreview.value = ''
   avatarFile.value = null
   dialogVisible.value = true
@@ -759,5 +812,64 @@ onMounted(async () => {
 .no-role {
   color: #94a3b8;
   font-size: 13px;
+}
+
+.password-strength {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.strength-bar {
+  flex: 1;
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.strength-fill {
+  height: 100%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+  border-radius: 3px;
+}
+
+.strength-fill.weak {
+  background: #ef4444;
+}
+
+.strength-fill.medium {
+  background: #f59e0b;
+}
+
+.strength-fill.strong {
+  background: #10b981;
+}
+
+.strength-fill.very-strong {
+  background: #059669;
+}
+
+.strength-text {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 50px;
+}
+
+.strength-text.weak {
+  color: #ef4444;
+}
+
+.strength-text.medium {
+  color: #f59e0b;
+}
+
+.strength-text.strong {
+  color: #10b981;
+}
+
+.strength-text.very-strong {
+  color: #059669;
 }
 </style>
