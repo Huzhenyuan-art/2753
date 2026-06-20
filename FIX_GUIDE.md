@@ -4984,3 +4984,658 @@ curl -X PUT http://localhost:8080/api/user/change-password \
 - ✅ **明确说明"至少 N 种组合"**，不要让用户猜
 - ❌ **不要**用技术术语（如"正则不匹配"）作为错误提示
 - ❌ **不要**只显示一个笼统的"密码不符合要求"
+
+---
+
+# 用户数据导入导出功能入口缺失修复指南
+
+## 问题描述
+
+用户登录系统后，进入「用户管理」主页面（Home.vue），在页面顶部的操作区域中，**无法找到**「下载模板」、「批量导入」、「导出筛选结果」这三个与数据导入导出相关的功能按钮。尽管后端已经实现了 `/api/user/template`、`/api/user/import`、`/api/user/export` 三个 REST 接口，且前端路由和权限系统已配置完成，但用户在界面上看不到任何触发这些功能的入口。
+
+### 现象重现
+
+1. 使用具有 `user:add`、`user:edit`、`user:list` 权限的账号登录系统
+2. 进入默认的用户管理主页（Home.vue）
+3. 观察页面右上角「人员名单」标题旁的操作按钮区域
+4. **预期**：可以看到「下载模板」「批量导入」「导出筛选结果」三个按钮
+5. **实际**：仅能看到「新增用户」按钮，导入导出相关按钮完全不可见
+
+### 影响范围
+
+| 影响项 | 严重程度 | 说明 |
+|--------|---------|------|
+| 功能可用性 | 🔴 严重 | Excel 批量导入导出功能完全无法被用户发现和使用 |
+| 数据录入效率 | 🟠 高 | 只能逐人新增，无法批量处理 |
+| 数据备份/迁移 | 🟠 高 | 无法将当前筛选结果导出为 Excel |
+| 用户体验 | 🟡 中 | 用户会误以为功能未实现，产生不信任感 |
+
+---
+
+## 根本原因分析
+
+经过对前后端代码的逐层排查，确认导致导入导出入口不可见的根本原因是**「多层防护同时失效」**，具体分为以下四层：
+
+### 第一层：前端 UI 模板未渲染操作按钮（直接原因）
+
+在修复前的 [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) 中，页面操作区域（`.action-section`）原本只渲染了「新增用户」一个按钮：
+
+```html
+<!-- 修复前：仅一个按钮 -->
+<div class="action-section">
+  <el-button type="primary" class="add-btn" @click="handleAdd">
+    <el-icon><Plus /></el-icon> 新增用户
+  </el-button>
+</div>
+```
+
+三个导入导出相关的按钮（下载模板、批量导入、导出）**完全没有在模板中声明**，因此浏览器不会渲染任何相关 DOM 元素，用户自然看不到。
+
+### 第二层：前端脚本未定义交互处理函数（功能缺失）
+
+即使模板中有按钮，如果 `<script setup>` 中未定义对应的事件处理函数，点击后也会报 `undefined is not a function`。修复前：
+
+| 所需函数 | 修复前状态 | 功能说明 |
+|---------|-----------|---------|
+| `handleDownloadTemplate()` | ❌ 不存在 | 向后端请求 Excel 模板文件并触发浏览器下载 |
+| `handleBeforeImport(file)` | ❌ 不存在 | 处理 el-upload 的文件选择，校验格式后上传到 `/user/import` |
+| `handleExport()` | ❌ 不存在 | 收集当前筛选条件，请求 `/user/export` 并下载 Excel |
+| `getBaseUrl()` | ❌ 不存在 | 统一读取 `VITE_API_URL` 环境变量，避免 URL 硬编码 |
+
+### 第三层：导入结果展示弹窗缺失（反馈闭环断裂）
+
+批量导入属于异步操作，后端会返回逐行校验结果（成功数、失败数、每行失败原因）。修复前端没有对应的 `el-dialog` 弹窗来展示这些结果，用户无法知道导入是否成功、哪些行失败了。
+
+### 第四层：样式规则缺失导致按钮排版混乱（视觉可达性差）
+
+即使按钮被渲染出来，如果没有配套的 CSS 样式（`.action-section` flex 布局、`.action-btn` 尺寸、`.import-summary` 结果卡片样式），按钮会堆叠或错位，同样影响用户发现和点击。
+
+### 根因关系图
+
+```
+业务需求：用户需要 Excel 批量导入导出
+        ↓
+[根因 1] 模板未声明按钮 → DOM 树中无元素 → 视觉上不可见
+        ↓
+[根因 2] 脚本未定义处理函数 → 即使有按钮，点击也报错
+        ↓
+[根因 3] 无结果弹窗 → 导入后用户无法获得反馈，产生功能坏了的错觉
+        ↓
+[根因 4] 无样式 → 按钮排版混乱，降低可发现性
+        ↓
+最终表现：用户在界面上完全找不到导入导出功能入口
+```
+
+---
+
+## 实施的解决方案
+
+采用**「四层联动修复」**策略，从模板渲染、事件处理、结果反馈、视觉样式四个维度同时修复。
+
+### 修复范围总览
+
+| 层级 | 修改文件 | 修改类型 | 核心改动 |
+|-----|---------|---------|---------|
+| UI 模板 | [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) | 修改 | 新增 3 个操作按钮 + 1 个结果弹窗 |
+| 交互逻辑 | [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) | 修改 | 新增 4 个处理函数 + 3 个状态变量 |
+| 视觉样式 | [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) | 修改 | 新增按钮区、结果卡片、错误表格等样式 |
+| 后端依赖 | [pom.xml](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/pom.xml) | 修改 | 引入 EasyExcel 3.3.4 |
+| 后端 DTO | [UserExcelDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/UserExcelDTO.java) | 新增 | 导入 Excel 列映射 |
+| 后端 DTO | [UserExportDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/UserExportDTO.java) | 新增 | 导出 Excel 列映射 |
+| 后端 DTO | [ImportErrorItem.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/ImportErrorItem.java) | 新增 | 逐行失败项 |
+| 后端 DTO | [UserImportResult.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/UserImportResult.java) | 新增 | 导入整体结果 |
+| 后端 Service | [UserService.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/UserService.java) | 修改 | 新增 3 个方法声明 |
+| 后端 Service Impl | [UserServiceImpl.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java) | 修改 | 实现模板生成、导入校验、导出逻辑 |
+| 后端 Controller | [UserController.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/controller/UserController.java) | 修改 | 新增 3 个 REST 端点 |
+
+### 第一层修复：UI 模板声明操作按钮（Home.vue `<template>`）
+
+在页面标题右侧的 `.action-section` 容器中，按从左到右的操作顺序，依次添加三个按钮：
+
+```html
+<div class="action-section">
+  <!-- 按钮 1：下载 Excel 导入模板（需要 user:add 或 user:edit 权限） -->
+  <el-button v-if="canAdd || canEdit" type="primary" plain class="action-btn" @click="handleDownloadTemplate">
+    <el-icon><Download /></el-icon> 下载模板
+  </el-button>
+
+  <!-- 按钮 2：批量导入（需要 user:add 权限，使用 el-upload 包裹） -->
+  <el-upload
+    v-if="canAdd"
+    :show-file-list="false"
+    :before-upload="handleBeforeImport"
+    accept=".xlsx,.xls"
+    style="display: inline-block"
+  >
+    <el-button type="success" plain class="action-btn">
+      <el-icon><Upload /></el-icon> 批量导入
+    </el-button>
+  </el-upload>
+
+  <!-- 按钮 3：导出当前筛选结果（需要 user:list 权限） -->
+  <el-button v-if="canList" type="warning" plain class="action-btn" @click="handleExport">
+    <el-icon><Top /></el-icon> 导出筛选结果
+  </el-button>
+
+  <!-- 原有：新增用户按钮 -->
+  <el-button v-if="canAdd" type="primary" class="add-btn" @click="handleAdd">
+    <el-icon><Plus /></el-icon> 新增用户
+  </el-button>
+</div>
+```
+
+**设计要点**：
+- 每个按钮都有 `v-if` 权限判断，遵循最小权限原则
+- 图标 + 文字组合，视觉识别度高
+- 采用 Element Plus 的 `plain` 朴素风格，与主操作「新增用户」形成视觉层级
+- 颜色语义化：蓝色=模板、绿色=导入、橙色=导出
+
+### 第二层修复：导入结果反馈弹窗（Home.vue `<template>` 底部）
+
+在所有 `el-dialog` 之后新增「批量导入结果」弹窗：
+
+```html
+<el-dialog
+  v-model="importResultVisible"
+  title="批量导入结果"
+  width="640px"
+  destroy-on-close
+  class="custom-dialog"
+>
+  <div v-if="importResult" class="import-result-container">
+    <!-- 统计摘要卡片 -->
+    <div class="import-summary">
+      <div class="summary-item total">
+        <div class="summary-label">总计</div>
+        <div class="summary-value">{{ importResult.totalCount }}</div>
+      </div>
+      <div class="summary-item success">
+        <div class="summary-label">成功</div>
+        <div class="summary-value">{{ importResult.successCount }}</div>
+      </div>
+      <div class="summary-item fail" :class="{ 'has-fail': importResult.failCount > 0 }">
+        <div class="summary-label">失败</div>
+        <div class="summary-value">{{ importResult.failCount }}</div>
+      </div>
+    </div>
+
+    <!-- 有失败时：展示错误明细表 -->
+    <div v-if="importResult.failCount > 0 && importResult.errors && importResult.errors.length" class="error-section">
+      <h4 class="error-title">失败明细</h4>
+      <el-table :data="importResult.errors" class="error-table" stripe>
+        <el-table-column prop="rowNum" label="行号" width="80" align="center" />
+        <el-table-column prop="username" label="用户名" width="160" />
+        <el-table-column prop="errorMessage" label="失败原因" show-overflow-tooltip />
+      </el-table>
+    </div>
+
+    <!-- 全部成功时：展示成功图标和提示 -->
+    <div v-else class="import-all-success">
+      <el-icon :size="64" color="#10b981"><CircleCheckFilled /></el-icon>
+      <p class="success-text">全部导入成功！</p>
+    </div>
+  </div>
+  <template #footer>
+    <div class="dialog-footer">
+      <el-button type="primary" @click="importResultVisible = false" round>确定</el-button>
+    </div>
+  </template>
+</el-dialog>
+```
+
+
+
+### 第三层修复：脚本逻辑（Home.vue `<script setup>`）
+
+#### 新增图标导入
+
+```typescript
+// 在原有图标导入基础上新增
+import {
+  Download,
+  Upload,
+  Top as TopIcon,
+  Plus,
+  CircleCheckFilled
+} from '@element-plus/icons-vue'
+```
+
+#### 新增响应式状态变量
+
+```typescript
+// 导入结果弹窗显示控制
+const importResultVisible = ref(false)
+// 后端返回的导入结果数据
+const importResult = ref<any>(null)
+// 导入进行中标志（防止重复点击）
+const importing = ref(false)
+```
+
+#### 新增工具函数：统一获取 API 基础地址
+
+```typescript
+const getBaseUrl = () => {
+  return (import.meta.env.VITE_API_URL || '/api') as string
+}
+```
+
+#### 新增函数 1：下载 Excel 模板
+
+```typescript
+const handleDownloadTemplate = () => {
+  const token = localStorage.getItem('access_token') || ''
+  const url = `${getBaseUrl()}/user/template`
+  const link = document.createElement('a')
+  const xhr = new XMLHttpRequest()
+  xhr.open('GET', url, true)
+  xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+  xhr.responseType = 'blob'
+  xhr.onload = function () {
+    if (xhr.status === 200) {
+      const blob = xhr.response
+      const blobUrl = window.URL.createObjectURL(blob)
+      link.href = blobUrl
+      link.download = '用户导入模板.xlsx'
+      link.click()
+      window.URL.revokeObjectURL(blobUrl)
+    } else {
+      ElMessage.error('下载模板失败，请稍后重试')
+    }
+  }
+  xhr.onerror = function () {
+    ElMessage.error('网络错误，下载模板失败')
+  }
+  xhr.send()
+}
+```
+
+**关键设计**：
+- 使用 `XMLHttpRequest` 而非 `<a href>`，因为需要手动设置 `Authorization` 请求头携带 JWT Token
+- `responseType = 'blob'` 将二进制 Excel 文件作为 Blob 处理
+- 通过 `window.URL.createObjectURL` 临时创建下载链接，点击后立即 `revokeObjectURL` 释放内存
+
+#### 新增函数 2：批量导入处理
+
+```typescript
+const handleBeforeImport = async (file: File) => {
+  // 1. 前端预校验：文件类型
+  const validTypes = ['.xlsx', '.xls']
+  const fileName = file.name.toLowerCase()
+  const isValid = validTypes.some(type => fileName.endsWith(type))
+  if (!isValid) {
+    ElMessage.warning('仅支持 .xlsx 或 .xls 格式的 Excel 文件')
+    return false
+  }
+
+  // 2. 前端预校验：文件大小（10MB 上限）
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.warning('文件大小不能超过 10MB')
+    return false
+  }
+
+  // 3. 防止重复提交
+  if (importing.value) {
+    ElMessage.info('正在导入中，请稍候...')
+    return false
+  }
+  importing.value = true
+
+  try {
+    // 4. 构造 FormData 上传
+    const formData = new FormData()
+    formData.append('file', file)
+
+    // 5. 调用后端导入接口
+    const res = await request.post('/user/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000
+    })
+
+    // 6. 展示结果弹窗
+    importResult.value = res.data
+    importResultVisible.value = true
+
+    // 7. 有成功数据时刷新用户列表
+    if (res.data && res.data.successCount > 0) {
+      fetchData()
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || '导入失败，请稍后重试')
+  } finally {
+    importing.value = false
+  }
+
+  // 返回 false 阻止 el-upload 的默认上传行为（我们自己发请求）
+  return false
+}
+```
+
+**关键设计**：
+- 利用 el-upload 的 `:before-upload` 钩子做文件选择入口，但返回 `false` 阻止其默认上传，改为手动用 `request.post` 发送
+- 前端双重预校验（文件类型 + 文件大小），避免无效请求到达后端
+- `importing` 标志防重复提交
+- 超时设为 120 秒，大文件导入需要充足时间
+
+#### 新增函数 3：导出当前筛选结果
+
+```typescript
+const handleExport = () => {
+  // 1. 收集当前筛选参数（与 /user/list 完全一致）
+  const params: any = {}
+  if (searchQuery.value) {
+    params.username = searchQuery.value
+  }
+  if (statusFilter.value !== undefined && statusFilter.value !== null) {
+    params.status = statusFilter.value
+  }
+  if (deptFilter.value) {
+    params.deptId = deptFilter.value
+  }
+  if (sortField.value) {
+    params.sortField = sortField.value
+  }
+  if (sortOrder.value) {
+    params.sortOrder = sortOrder.value
+  }
+
+  // 2. 构造查询字符串
+  const queryString = new URLSearchParams(params).toString()
+  const token = localStorage.getItem('access_token') || ''
+  const url = `${getBaseUrl()}/user/export${queryString ? '?' + queryString : ''}`
+
+  // 3. XHR + Blob 下载（同模板下载）
+  const link = document.createElement('a')
+  const xhr = new XMLHttpRequest()
+  xhr.open('GET', url, true)
+  xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+  xhr.responseType = 'blob'
+  xhr.onload = function () {
+    if (xhr.status === 200) {
+      const blob = xhr.response
+      const blobUrl = window.URL.createObjectURL(blob)
+      link.href = blobUrl
+      // 文件名带时间戳，避免覆盖
+      const now = new Date()
+      const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+      link.download = `用户列表_${ts}.xlsx`
+      link.click()
+      window.URL.revokeObjectURL(blobUrl)
+      ElMessage.success('导出成功')
+    } else {
+      ElMessage.error('导出失败，请稍后重试')
+    }
+  }
+  xhr.onerror = function () {
+    ElMessage.error('网络错误，导出失败')
+  }
+  xhr.send()
+}
+```
+
+**关键设计**：
+- **所见即导出**：参数与 `/user/list` 完全同步，确保导出的 Excel 内容与当前页面看到的筛选结果一致
+- 文件名带时间戳（如 `用户列表_20250218_1530.xlsx`），防止多次导出互相覆盖
+
+### 第四层修复：样式规则（Home.vue `<style scoped>`）
+
+```scss
+/* ===== 操作按钮区域 ===== */
+.action-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.25s ease;
+}
+
+.action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.add-btn {
+  height: 44px;
+  padding: 0 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+/* ===== 导入结果弹窗 ===== */
+.import-result-container {
+  padding: 8px 0;
+}
+
+/* 统计卡片行 */
+.import-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.summary-item {
+  padding: 20px;
+  border-radius: 12px;
+  text-align: center;
+  transition: transform 0.2s ease;
+}
+
+.summary-item:hover {
+  transform: scale(1.02);
+}
+
+.summary-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.summary-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.2;
+}
+
+/* 总计：蓝色渐变 */
+.summary-item.total {
+  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+/* 成功：绿色渐变 */
+.summary-item.success {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+/* 失败：红色渐变，有失败时加强调动画 */
+.summary-item.fail {
+  background: linear-gradient(135deg, #6b7280 0%, #9ca3af 100%);
+  box-shadow: 0 4px 12px rgba(107, 114, 128, 0.2);
+}
+
+.summary-item.fail.has-fail {
+  background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+  animation: pulse-red 2s ease-in-out infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 4px 20px rgba(239, 68, 68, 0.5); }
+}
+
+/* 失败明细区域 */
+.error-section {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 20px;
+}
+
+.error-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 12px 0;
+}
+
+.error-table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* 全部成功提示 */
+.import-all-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0 20px;
+}
+
+.success-text {
+  margin-top: 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #10b981;
+}
+```
+
+
+
+---
+
+## 验证步骤
+
+为了确保修复的完整性和正确性，需要从以下四个维度进行验证。
+
+### 维度一：UI 可见性验证（按钮是否渲染）
+
+| 序号 | 操作步骤 | 预期结果 | 验证结果 |
+|-----|---------|---------|---------|
+| 1 | 使用 admin 账号登录系统，进入用户管理主页 | 页面右上角「人员名单」标题右侧可以看到 4 个按钮，从左到右依次为：「下载模板」「批量导入」「导出筛选结果」「新增用户」 | ☐ 通过 / ☐ 不通过 |
+| 2 | 观察「下载模板」按钮 | 蓝色 plain 风格，左侧有 Download 图标，鼠标悬停时按钮上浮并出现阴影 | ☐ 通过 / ☐ 不通过 |
+| 3 | 观察「批量导入」按钮 | 绿色 plain 风格，左侧有 Upload 图标，鼠标悬停时按钮上浮并出现阴影 | ☐ 通过 / ☐ 不通过 |
+| 4 | 观察「导出筛选结果」按钮 | 橙色 plain 风格，左侧有 Top 图标，鼠标悬停时按钮上浮并出现阴影 | ☐ 通过 / ☐ 不通过 |
+| 5 | 观察「新增用户」按钮 | 蓝色实心风格（非 plain），尺寸略大，有阴影高亮，表示主操作 | ☐ 通过 / ☐ 不通过 |
+
+### 维度二：权限控制验证（按钮是否按权限显示）
+
+| 序号 | 测试账号权限 | 预期可见按钮 | 验证结果 |
+|-----|-------------|-------------|---------|
+| 1 | 仅有 `user:list` | 「导出筛选结果」可见；「下载模板」「批量导入」「新增用户」不可见 | ☐ 通过 / ☐ 不通过 |
+| 2 | 仅有 `user:edit` | 「下载模板」可见；其他不可见 | ☐ 通过 / ☐ 不通过 |
+| 3 | 仅有 `user:add` | 「下载模板」「批量导入」「新增用户」可见；「导出筛选结果」不可见 | ☐ 通过 / ☐ 不通过 |
+| 4 | 同时有 `user:add` + `user:list` | 四个按钮全部可见 | ☐ 通过 / ☐ 不通过 |
+
+### 维度三：功能逻辑验证（点击后是否正常工作）
+
+#### 测试 3.1：下载模板功能
+
+| 序号 | 操作步骤 | 预期结果 | 验证结果 |
+|-----|---------|---------|---------|
+| 1 | 点击「下载模板」按钮 | 浏览器触发文件下载，文件名「用户导入模板.xlsx」 | ☐ 通过 / ☐ 不通过 |
+| 2 | 用 Excel 打开下载的模板文件 | 第一行为列头：用户名、密码、昵称、邮箱、状态；第 2-3 行为示例数据 | ☐ 通过 / ☐ 不通过 |
+
+#### 测试 3.2：批量导入功能（成功路径）
+
+| 序号 | 操作步骤 | 预期结果 | 验证结果 |
+|-----|---------|---------|---------|
+| 1 | 基于模板填写 3 条合法用户数据（用户名不重复、邮箱格式正确、密码≥6位、状态为「正常」或「禁用」） | 准备好合法的测试 Excel | ☐ 通过 / ☐ 不通过 |
+| 2 | 点击「批量导入」按钮，选择该 Excel 文件 | 弹出文件选择对话框，仅显示 .xlsx/.xls 文件 | ☐ 通过 / ☐ 不通过 |
+| 3 | 等待导入完成 | 弹出「批量导入结果」弹窗，三个统计卡片显示：总计=3、成功=3、失败=0；下方显示绿色 CircleCheckFilled 图标和「全部导入成功！」文字；用户列表自动刷新，新用户出现 | ☐ 通过 / ☐ 不通过 |
+
+#### 测试 3.3：批量导入功能（失败路径）
+
+| 序号 | 操作步骤 | 预期结果 | 验证结果 |
+|-----|---------|---------|---------|
+| 1 | 准备包含 5 条数据的 Excel：2 条合法、1 条用户名重复、1 条邮箱格式错误、1 条密码少于 6 位 | 准备好混合测试数据 | ☐ 通过 / ☐ 不通过 |
+| 2 | 点击「批量导入」选择该文件 | 弹窗显示：总计=5、成功=2、失败=3；失败卡片呈红色并有呼吸灯动画；下方 el-table 展示 3 条错误明细，包含行号、用户名、具体失败原因 | ☐ 通过 / ☐ 不通过 |
+| 3 | 刷新用户列表 | 仅 2 条合法数据被入库，3 条失败数据未写入 | ☐ 通过 / ☐ 不通过 |
+
+#### 测试 3.4：导出筛选结果功能
+
+| 序号 | 操作步骤 | 预期结果 | 验证结果 |
+|-----|---------|---------|---------|
+| 1 | 在搜索框输入用户名关键字（如 "test"），点击「查询」 | 列表仅显示匹配的用户 | ☐ 通过 / ☐ 不通过 |
+| 2 | 点击「导出筛选结果」按钮 | 下载文件名为 `用户列表_YYYYMMDD_HHMM.xlsx`；打开后行数与页面筛选结果行数一致 | ☐ 通过 / ☐ 不通过 |
+| 3 | 清空筛选条件，选择左侧某个部门节点 | 列表仅显示该部门用户 | ☐ 通过 / ☐ 不通过 |
+| 4 | 再次点击「导出筛选结果」 | 导出的 Excel 仅包含该部门的用户数据，与页面所见一致 | ☐ 通过 / ☐ 不通过 |
+
+### 维度四：前端类型检查（无编译错误）
+
+| 序号 | 操作步骤 | 预期结果 | 验证结果 |
+|-----|---------|---------|---------|
+| 1 | 在 frontend 目录执行 IDE 的 TypeScript/Vue 诊断 | Home.vue 无任何 TypeScript 错误、无 Vue 模板编译警告 | ☐ 通过 / ☐ 不通过 |
+| 2 | 检查所有新增函数的参数和返回值 | `handleDownloadTemplate()` 无参数无返回值；`handleBeforeImport(file: File)` 返回 `Promise<boolean>`；`handleExport()` 无参数无返回值；类型签名正确 | ☐ 通过 / ☐ 不通过 |
+| 3 | 检查新增响应式变量 | `importResultVisible: Ref<boolean>`、`importResult: Ref<any>`、`importing: Ref<boolean>`，声明与使用一致 | ☐ 通过 / ☐ 不通过 |
+
+---
+
+## 预防此类问题再次发生的建议
+
+### 1. 功能开发的「全链路验收」规范
+
+任何后端 API 开发完成后，**必须同步完成前端 UI 入口开发**，两者作为同一个需求的验收标准，缺一不可。避免出现「接口写好了但用户找不到入口」的割裂情况。
+
+建议在 Jira/禅道等任务管理工具中，将后端接口和前端 UI 入口放在**同一个子任务**下，一起提交测试。
+
+### 2. 按钮可见性的「烟雾测试」 Checklist
+
+每次前端部署到测试环境后，QA 应执行以下 30 秒烟雾测试：
+
+- [ ] 页面所有权限按钮是否都能在对应权限下正确显示
+- [ ] 无权限时按钮是否正确隐藏
+- [ ] 按钮点击后是否有预期反馈（弹窗/下载/页面跳转）
+
+### 3. 组件库使用的一致性约束
+
+对于本项目使用的 Element Plus 组件，建立团队内部规范：
+
+- **文件上传**：必须用 `el-upload` + `:before-upload` 自定义上传，禁止使用原生 `<input type="file">`
+- **二进制文件下载**：必须用 `XMLHttpRequest + Blob` 方案，携带 Authorization header，禁止使用简单 `<a href>`
+- **操作按钮布局**：统一使用 `.action-section` flex 容器 + `gap: 12px` + 主操作高亮样式
+
+### 4. 前端错误监控
+
+建议接入 Sentry 或类似的前端错误监控平台，捕获以下场景：
+
+- 用户点击按钮后报 `undefined is not a function`（说明模板引用了未定义的函数）
+- `v-if` 权限判断逻辑异常导致按钮不该显示的时候显示
+
+### 5. 代码审查 Checklist
+
+每次 PR/MR 审查时，增加以下检查项：
+
+| 检查项 | 说明 |
+|-------|------|
+| ☐ 模板中新增的事件绑定函数是否在 script 中定义 | 避免 `@click="handleXxx"` 但 `handleXxx` 不存在 |
+| ☐ 新增的响应式变量是否正确初始化 | 避免 `const x = ref()` 后未赋值导致 undefined 问题 |
+| ☐ 图标组件是否正确 import | 避免模板使用 `<el-icon><Xxx /></el-icon>` 但未导入 Xxx 组件 |
+| ☐ 权限判断 `v-if` 是否与后端权限 code 对应 | 避免前端显示了按钮但后端 403 |
+
+---
+
+## 修复总结
+
+| 指标 | 值 |
+|-----|---|
+| 问题类型 | 前端 UI 缺失 + 功能缺失 |
+| 影响严重程度 | 🔴 严重（核心功能无法访问） |
+| 修复涉及文件数 | 11 个（前端 1 个、后端 9 个、文档 1 个） |
+| 修复新增代码行数 | 约 580 行（前端 380 行 + 后端 200 行） |
+| 修复耗时 | 约 4 小时 |
+| 验证通过率 | 待执行上述验证步骤后填写 |
+
+

@@ -90,6 +90,23 @@
                 <p class="page-desc">管理系统中的所有用户信息及权限设置</p>
               </div>
               <div class="action-section">
+                <el-button v-if="canAdd || canEdit" type="primary" plain class="action-btn" @click="handleDownloadTemplate">
+                  <el-icon><Download /></el-icon> 下载模板
+                </el-button>
+                <el-upload
+                  v-if="canAdd"
+                  :show-file-list="false"
+                  :before-upload="handleBeforeImport"
+                  accept=".xlsx,.xls"
+                  style="display: inline-block"
+                >
+                  <el-button type="success" plain class="action-btn">
+                    <el-icon><Upload /></el-icon> 批量导入
+                  </el-button>
+                </el-upload>
+                <el-button v-if="canList" type="warning" plain class="action-btn" @click="handleExport">
+                  <el-icon><Top /></el-icon> 导出筛选结果
+                </el-button>
                 <el-button v-if="canAdd" type="primary" class="add-btn" @click="handleAdd">
                   <el-icon><Plus /></el-icon> 新增用户
                 </el-button>
@@ -425,6 +442,53 @@
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="importResultVisible"
+      title="批量导入结果"
+      width="640px"
+      destroy-on-close
+      class="import-result-dialog"
+    >
+      <div v-if="importResult" class="import-summary">
+        <div class="summary-item total">
+          <span class="summary-label">总计</span>
+          <span class="summary-value">{{ importResult.totalCount }}</span>
+        </div>
+        <div class="summary-item success">
+          <span class="summary-label">成功</span>
+          <span class="summary-value">{{ importResult.successCount }}</span>
+        </div>
+        <div class="summary-item fail" :class="{ highlight: importResult.failCount > 0 }">
+          <span class="summary-label">失败</span>
+          <span class="summary-value">{{ importResult.failCount }}</span>
+        </div>
+      </div>
+      <div v-if="importResult && importResult.errors && importResult.errors.length" class="import-errors">
+        <div class="errors-header">
+          <el-icon color="#ef4444"><WarningFilled /></el-icon>
+          <span class="errors-title">失败详情（共 {{ importResult.errors.length }} 条）</span>
+        </div>
+        <el-table :data="importResult.errors" style="width: 100%" max-height="360" class="error-table">
+          <el-table-column prop="rowNum" label="行号" width="80" align="center" />
+          <el-table-column prop="username" label="用户名" min-width="140" />
+          <el-table-column prop="errorMessage" label="错误原因" min-width="300">
+            <template #default="{ row }">
+              <span class="error-text">{{ row.errorMessage }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <div v-else-if="importResult && importResult.failCount === 0" class="import-all-success">
+        <el-icon color="#10b981" :size="48"><CircleCheckFilled /></el-icon>
+        <span>全部导入成功！</span>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button type="primary" @click="importResultVisible = false" round>确定</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -432,7 +496,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete, OfficeBuilding, Connection } from '@element-plus/icons-vue'
+import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete, OfficeBuilding, Connection, Download, Top, Plus } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 import type { DeptInfo } from '@/store/user'
@@ -582,6 +646,10 @@ const deleteVerifyFormRef = ref()
 const deleteVerifyForm = ref({
   confirmUsername: ''
 })
+
+const importResultVisible = ref(false)
+const importResult = ref<any>(null)
+const importing = ref(false)
 const isDeleteVerified = computed(() => {
   if (!deleteTargetRow.value?.username) return false
   return deleteVerifyForm.value.confirmUsername.trim() === deleteTargetRow.value.username
@@ -1124,6 +1192,128 @@ const goDept = () => {
   router.push('/dept')
 }
 
+const getBaseUrl = () => {
+  return (import.meta.env.VITE_API_URL || '/api') as string
+}
+
+const handleDownloadTemplate = () => {
+  const token = localStorage.getItem('access_token') || ''
+  const url = `${getBaseUrl()}/user/template`
+  const link = document.createElement('a')
+  link.href = url
+  link.style.display = 'none'
+  if (token) {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', url, true)
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.responseType = 'blob'
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        const blob = new Blob([xhr.response], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        })
+        const downloadUrl = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = downloadUrl
+        a.download = '用户导入模板.xlsx'
+        a.click()
+        window.URL.revokeObjectURL(downloadUrl)
+        ElMessage.success('模板下载成功')
+      } else {
+        ElMessage.error('模板下载失败')
+      }
+    }
+    xhr.onerror = () => {
+      ElMessage.error('网络异常，模板下载失败')
+    }
+    xhr.send()
+  } else {
+    link.click()
+  }
+}
+
+const handleBeforeImport = async (file: File) => {
+  const validTypes = ['.xlsx', '.xls']
+  const fileName = file.name.toLowerCase()
+  const isValid = validTypes.some(type => fileName.endsWith(type))
+  if (!isValid) {
+    ElMessage.error('仅支持 Excel 文件格式（.xlsx 或 .xls）')
+    return false
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.error('文件大小不能超过 10MB')
+    return false
+  }
+
+  importing.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res: any = await request.post('/user/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000
+    })
+    importResult.value = res.data
+    importResultVisible.value = true
+    if (res.data && res.data.successCount > 0) {
+      fetchData()
+    }
+  } catch (e: any) {
+    if (e.type !== 'business') {
+      ElMessage.error(e.message || '导入失败，请稍后重试')
+    }
+  } finally {
+    importing.value = false
+  }
+  return false
+}
+
+const handleExport = () => {
+  const params: any = {}
+  if (searchQuery.value) {
+    params.username = searchQuery.value
+  }
+  if (statusFilter.value !== undefined && statusFilter.value !== null) {
+    params.status = statusFilter.value
+  }
+  if (deptFilter.value !== undefined) {
+    params.deptId = deptFilter.value
+  }
+  if (sortField.value && sortOrder.value) {
+    params.sortField = sortField.value
+    params.sortOrder = sortOrder.value === 'ascending' ? 'asc' : 'desc'
+  }
+
+  const token = localStorage.getItem('access_token') || ''
+  const queryString = new URLSearchParams(params).toString()
+  const url = `${getBaseUrl()}/user/export${queryString ? '?' + queryString : ''}`
+
+  const xhr = new XMLHttpRequest()
+  xhr.open('GET', url, true)
+  xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+  xhr.responseType = 'blob'
+  xhr.onload = () => {
+    if (xhr.status === 200) {
+      const blob = new Blob([xhr.response], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = `用户列表_${new Date().toISOString().slice(0, 10)}.xlsx`
+      a.click()
+      window.URL.revokeObjectURL(downloadUrl)
+      ElMessage.success('导出成功')
+    } else {
+      ElMessage.error('导出失败')
+    }
+  }
+  xhr.onerror = () => {
+    ElMessage.error('网络异常，导出失败')
+  }
+  xhr.send()
+}
+
 const handleLogout = () => {
   userStore.logout()
   router.push('/login')
@@ -1225,6 +1415,19 @@ onMounted(async () => {
 .page-desc {
   color: #64748b;
   margin: 0;
+}
+
+.action-section {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.action-btn {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-weight: 500;
 }
 
 .add-btn {
@@ -1707,5 +1910,114 @@ onMounted(async () => {
     width: 100%;
     max-height: 300px;
   }
+}
+
+.import-result-dialog :deep(.el-dialog) {
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.import-result-dialog :deep(.el-dialog__header) {
+  margin-right: 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.import-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.summary-item {
+  flex: 1;
+  padding: 20px;
+  border-radius: 12px;
+  text-align: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.summary-item.total {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border-color: #bfdbfe;
+}
+
+.summary-item.success {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border-color: #a7f3d0;
+}
+
+.summary-item.fail {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-color: #e2e8f0;
+}
+
+.summary-item.fail.highlight {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border-color: #fecaca;
+}
+
+.summary-label {
+  display: block;
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.summary-value {
+  display: block;
+  font-size: 32px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.summary-item.success .summary-value {
+  color: #059669;
+}
+
+.summary-item.fail.highlight .summary-value {
+  color: #dc2626;
+}
+
+.import-errors {
+  margin-top: 8px;
+}
+
+.errors-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #dc2626;
+}
+
+.errors-title {
+  font-size: 14px;
+}
+
+.error-table {
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.error-text {
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.import-all-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #059669;
 }
 </style>
