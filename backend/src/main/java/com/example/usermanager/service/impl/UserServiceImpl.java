@@ -1,11 +1,18 @@
 package com.example.usermanager.service.impl;
 
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.read.listener.ReadListener;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.example.usermanager.dto.ChangePasswordDTO;
+import com.example.usermanager.dto.ImportErrorItem;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.dto.RefreshTokenDTO;
+import com.example.usermanager.dto.UserExcelDTO;
+import com.example.usermanager.dto.UserExportDTO;
+import com.example.usermanager.dto.UserImportResult;
 import com.example.usermanager.entity.Dept;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
@@ -25,14 +32,20 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -305,5 +318,207 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             }
         }
         return resultPage;
+    }
+
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(
+            "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    @Override
+    public void downloadTemplate(OutputStream outputStream) {
+        List<UserExcelDTO> demoData = new ArrayList<>();
+        UserExcelDTO demo1 = new UserExcelDTO();
+        demo1.setUsername("zhangsan");
+        demo1.setPassword("123456");
+        demo1.setNickname("张三");
+        demo1.setEmail("zhangsan@example.com");
+        demo1.setStatusText("1");
+        demoData.add(demo1);
+
+        UserExcelDTO demo2 = new UserExcelDTO();
+        demo2.setUsername("lisi");
+        demo2.setPassword("123456");
+        demo2.setNickname("李四");
+        demo2.setEmail("lisi@example.com");
+        demo2.setStatusText("0");
+        demoData.add(demo2);
+
+        EasyExcel.write(outputStream, UserExcelDTO.class)
+                .sheet("用户导入模板")
+                .doWrite(demoData);
+    }
+
+    @Override
+    @Transactional
+    public UserImportResult importUsers(MultipartFile file) {
+        List<UserExcelDTO> excelData = new ArrayList<>();
+        try {
+            EasyExcel.read(file.getInputStream(), UserExcelDTO.class, new ReadListener<UserExcelDTO>() {
+                @Override
+                public void invoke(UserExcelDTO data, AnalysisContext context) {
+                    excelData.add(data);
+                }
+                @Override
+                public void doAfterAllAnalysed(AnalysisContext context) {
+                }
+            }).sheet().doRead();
+        } catch (IOException e) {
+            throw new RuntimeException("读取Excel文件失败: " + e.getMessage());
+        }
+
+        int totalCount = excelData.size();
+        int successCount = 0;
+        List<ImportErrorItem> errors = new ArrayList<>();
+        Set<String> fileUsernames = new HashSet<>();
+
+        List<User> dbExistingUsers = this.list(new LambdaQueryWrapper<User>().select(User::getUsername));
+        Set<String> dbUsernames = dbExistingUsers.stream()
+                .map(User::getUsername)
+                .collect(Collectors.toSet());
+
+        List<User> toSaveUsers = new ArrayList<>();
+
+        for (int i = 0; i < excelData.size(); i++) {
+            int rowNum = i + 2;
+            UserExcelDTO dto = excelData.get(i);
+            List<String> rowErrors = new ArrayList<>();
+            String rowUsername = dto.getUsername();
+
+            if (!StringUtils.hasText(rowUsername)) {
+                rowErrors.add("用户名不能为空");
+            } else {
+                if (fileUsernames.contains(rowUsername)) {
+                    rowErrors.add("文件内存在重复用户名");
+                }
+                if (dbUsernames.contains(rowUsername)) {
+                    rowErrors.add("用户名已存在数据库中");
+                }
+                fileUsernames.add(rowUsername);
+            }
+
+            if (!StringUtils.hasText(dto.getPassword())) {
+                rowErrors.add("密码不能为空");
+            } else if (dto.getPassword().length() < 6) {
+                rowErrors.add("密码长度至少为6位");
+            }
+
+            if (!StringUtils.hasText(dto.getNickname())) {
+                rowErrors.add("昵称不能为空");
+            }
+
+            String email = dto.getEmail();
+            if (StringUtils.hasText(email)) {
+                if (!EMAIL_PATTERN.matcher(email).matches()) {
+                    rowErrors.add("邮箱格式不正确");
+                }
+            }
+
+            Integer statusValue = null;
+            if (StringUtils.hasText(dto.getStatusText())) {
+                String text = dto.getStatusText().trim();
+                if ("0".equals(text) || "1".equals(text)) {
+                    statusValue = Integer.parseInt(text);
+                } else {
+                    rowErrors.add("状态值只能为 0(禁用) 或 1(启用)");
+                }
+            }
+
+            if (!rowErrors.isEmpty()) {
+                errors.add(new ImportErrorItem(rowNum, rowUsername, String.join("；", rowErrors)));
+                continue;
+            }
+
+            User user = new User();
+            user.setUsername(rowUsername);
+            user.setPassword(passwordEncoder.encode(dto.getPassword()));
+            user.setNickname(dto.getNickname());
+            user.setEmail(email);
+            user.setStatus(statusValue != null ? statusValue : 1);
+            toSaveUsers.add(user);
+            dbUsernames.add(rowUsername);
+            successCount++;
+        }
+
+        if (!toSaveUsers.isEmpty()) {
+            this.saveBatch(toSaveUsers);
+        }
+
+        int failCount = totalCount - successCount;
+        return new UserImportResult(totalCount, successCount, failCount, errors);
+    }
+
+    @Override
+    public void exportUsers(OutputStream outputStream, LambdaQueryWrapper<User> wrapper, Long deptId) {
+        List<User> users;
+        if (deptId != null) {
+            List<Long> deptIds = deptService.getChildDeptIds(deptId);
+            if (deptIds != null && !deptIds.isEmpty()) {
+                List<UserDept> userDepts = userDeptMapper.selectList(
+                        new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
+                if (userDepts != null && !userDepts.isEmpty()) {
+                    List<Long> userIds = userDepts.stream()
+                            .map(UserDept::getUserId)
+                            .distinct()
+                            .collect(Collectors.toList());
+                    if (!userIds.isEmpty()) {
+                        wrapper.in(User::getId, userIds);
+                    } else {
+                        wrapper.eq(User::getId, -1L);
+                    }
+                } else {
+                    wrapper.eq(User::getId, -1L);
+                }
+            } else {
+                wrapper.eq(User::getId, -1L);
+            }
+        }
+        users = this.list(wrapper);
+
+        List<UserExportDTO> exportList = new ArrayList<>();
+        if (!users.isEmpty()) {
+            List<Long> userIds = users.stream().map(User::getId).collect(Collectors.toList());
+            List<UserDept> allUserDepts = userIds.isEmpty() ? new ArrayList<>() :
+                    userDeptMapper.selectList(new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
+            List<Long> allDeptIds = allUserDepts.stream()
+                    .map(UserDept::getDeptId)
+                    .distinct()
+                    .collect(Collectors.toList());
+            List<Dept> allDepts = allDeptIds.isEmpty() ? new ArrayList<>() : deptService.listByIds(allDeptIds);
+            Map<Long, String> deptNameMap = allDepts.stream()
+                    .collect(Collectors.toMap(Dept::getId, Dept::getName));
+            Map<Long, List<Dept>> userDeptMap = allUserDepts.stream()
+                    .collect(Collectors.groupingBy(
+                            UserDept::getUserId,
+                            Collectors.mapping(ud -> {
+                                Dept d = new Dept();
+                                d.setId(ud.getDeptId());
+                                d.setName(deptNameMap.get(ud.getDeptId()));
+                                return d;
+                            }, Collectors.toList())
+                    ));
+
+            for (User user : users) {
+                UserExportDTO dto = new UserExportDTO();
+                dto.setId(user.getId());
+                dto.setUsername(user.getUsername());
+                dto.setNickname(user.getNickname());
+                dto.setEmail(user.getEmail());
+                dto.setStatusText(user.getStatus() != null && user.getStatus() == 1 ? "启用" : "禁用");
+                List<Dept> userDeptsList = userDeptMap.getOrDefault(user.getId(), new ArrayList<>());
+                String deptNames = userDeptsList.stream()
+                        .map(Dept::getName)
+                        .filter(name -> name != null)
+                        .collect(Collectors.joining("、"));
+                dto.setDeptNames(deptNames);
+                dto.setCreateTime(user.getCreateTime() != null ? user.getCreateTime().format(DATE_TIME_FORMATTER) : "");
+                dto.setUpdateTime(user.getUpdateTime() != null ? user.getUpdateTime().format(DATE_TIME_FORMATTER) : "");
+                exportList.add(dto);
+            }
+        }
+
+        EasyExcel.write(outputStream, UserExportDTO.class)
+                .sheet("用户列表")
+                .doWrite(exportList);
     }
 }

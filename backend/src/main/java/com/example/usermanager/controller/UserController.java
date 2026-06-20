@@ -7,6 +7,7 @@ import com.example.usermanager.common.Result;
 import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.dto.RefreshTokenDTO;
+import com.example.usermanager.dto.UserImportResult;
 import com.example.usermanager.entity.Dept;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
@@ -15,13 +16,18 @@ import com.example.usermanager.service.DeptService;
 import com.example.usermanager.service.PermissionService;
 import com.example.usermanager.service.RoleService;
 import com.example.usermanager.service.UserService;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -283,5 +289,79 @@ public class UserController {
         }
         long count = userService.count(wrapper);
         return Result.success(count == 0);
+    }
+
+    @GetMapping("/template")
+    @AuditLog(operation = "DOWNLOAD_TEMPLATE", module = "用户管理", description = "下载用户导入模板")
+    public void downloadTemplate(HttpServletResponse response) throws IOException {
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setCharacterEncoding("utf-8");
+        String fileName = URLEncoder.encode("用户导入模板", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
+        response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
+        userService.downloadTemplate(response.getOutputStream());
+    }
+
+    @PostMapping("/import")
+    @AuditLog(operation = "IMPORT", module = "用户管理", description = "批量导入用户")
+    public Result<UserImportResult> importUsers(@RequestParam("file") MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            return Result.error(400, "请选择要导入的文件");
+        }
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || (!originalFilename.toLowerCase().endsWith(".xlsx")
+                && !originalFilename.toLowerCase().endsWith(".xls"))) {
+            return Result.error(400, "仅支持 Excel 文件格式（.xlsx 或 .xls）");
+        }
+        try {
+            UserImportResult result = userService.importUsers(file);
+            return Result.success(result);
+        } catch (RuntimeException e) {
+            return Result.error(500, "导入失败：" + e.getMessage());
+        }
+    }
+
+    @GetMapping("/export")
+    @AuditLog(operation = "EXPORT", module = "用户管理", description = "导出用户列表")
+    public void exportUsers(@RequestParam(required = false) String username,
+                            @RequestParam(required = false) Integer status,
+                            @RequestParam(required = false) Long deptId,
+                            @RequestParam(required = false) String sortField,
+                            @RequestParam(required = false) String sortOrder,
+                            HttpServletResponse response) throws IOException {
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(username)) {
+            wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
+        }
+        if (status != null) {
+            wrapper.eq(User::getStatus, status);
+        }
+        boolean sortApplied = false;
+        if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
+            boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
+            if ("username".equals(sortField)) {
+                if (isAsc) {
+                    wrapper.orderByAsc(User::getUsername);
+                } else {
+                    wrapper.orderByDesc(User::getUsername);
+                }
+                sortApplied = true;
+            } else if ("createTime".equals(sortField)) {
+                if (isAsc) {
+                    wrapper.orderByAsc(User::getCreateTime);
+                } else {
+                    wrapper.orderByDesc(User::getCreateTime);
+                }
+                sortApplied = true;
+            }
+        }
+        if (!sortApplied) {
+            wrapper.orderByDesc(User::getCreateTime);
+        }
+
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setCharacterEncoding("utf-8");
+        String fileName = URLEncoder.encode("用户列表", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
+        response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
+        userService.exportUsers(response.getOutputStream(), wrapper, deptId);
     }
 }
