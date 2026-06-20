@@ -1986,3 +1986,253 @@ const showConfirmPassword = computed(() => {
 - 相似字段的显示条件要独立分析，不要想当然
 - 编辑场景和新增场景的字段需求可能不同，要逐一验证
 - 简单的条件改动也可能影响用户体验，测试时要覆盖所有场景
+
+---
+
+# 审计日志模块编译错误修复指南
+
+## 问题描述
+
+引入用户操作审计模块后，后端项目在编译过程中产生大量"符号找不到"和"歧义引用"错误，导致项目无法正常编译构建。
+
+### 典型编译错误信息
+
+```
+error: reference to AuditLog is ambiguous
+  both class com.example.usermanager.annotation.AuditLog in com.example.usermanager.annotation
+  and class com.example.usermanager.entity.AuditLog in com.example.usermanager.entity match
+
+error: cannot find symbol
+  symbol:   method setOperation(...)
+  location: variable auditLog of type AuditLog
+```
+
+---
+
+## 根因分析
+
+### 核心问题：同名类导入导致的歧义引用（Ambiguous Reference）
+
+在 [AuditLogAspect.java](file:///D:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/aspect/AuditLogAspect.java) 中，同时 import 了两个同名但不同包的类：
+
+```java
+import com.example.usermanager.annotation.AuditLog;  // 注解类（第4行）
+import com.example.usermanager.entity.AuditLog;      // 实体类（第5行）
+```
+
+这导致 Java 编译器在以下场景无法判断 `AuditLog` 具体指向哪个类：
+
+| 代码位置 | 编译器歧义 |
+|---------|-----------|
+| `public Object around(..., AuditLog auditLogAnnotation)` | 无法确定参数类型是注解还是实体 |
+| `AuditLog auditLog = new AuditLog()` | 无法确定变量类型是注解还是实体 |
+| `auditLog.setOperation(...)` | 如果推断为注解类型，则注解没有 setOperation 方法，报"找不到符号" |
+
+### 问题形成链条
+
+```
+① 新增 audit 模块时创建了两个名为 AuditLog 的类
+   ├─ annotation.AuditLog （自定义注解）
+   └─ entity.AuditLog      （数据库实体）
+
+② 在 AuditLogAspect 中需要同时使用这两个类
+   → 使用了两个 import 语句导入同名类
+
+③ Java 编译器检测到 ambiguous reference
+   → 抛出"reference to AuditLog is ambiguous"
+
+④ 由于类型推断失败，后续所有基于该类型的方法调用
+   → 都报"cannot find symbol"错误（级联错误）
+```
+
+---
+
+## 修复方案
+
+采用 **"保留短名注解 + 全限定实体类"** 的最小侵入方案。
+
+### 方案选择对比
+
+| 方案 | 改动范围 | 可读性 | 推荐度 |
+|-----|---------|-------|-------|
+| A. 注解用短名 + 实体用全限定类名 | 仅修改 AuditLogAspect.java 1个文件 | 高（注解使用频率高） | ✅ **推荐** |
+| B. 实体用短名 + 注解用全限定类名 | 仅修改 AuditLogAspect.java 1个文件 | 中（`@com.example.usermanager.annotation.AuditLog` 较冗长） | ⚠️ 可用 |
+| C. 重命名注解为 `@AuditOperation` | 需修改 Aspect + 所有使用注解的 Controller（共4个文件） | 高 | ⚠️ 改动量大 |
+| D. 重命名实体类为 `AuditLogRecord` | 需修改 Entity + Mapper + Service + Controller（共5个文件） | 高 | ❌ 改动量最大 |
+
+### 具体修改步骤
+
+#### 步骤一：移除实体类的 import 语句
+
+修改 [AuditLogAspect.java](file:///D:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/aspect/AuditLogAspect.java#L3-L9)：
+
+```java
+// 修改前（有歧义）
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.usermanager.annotation.AuditLog;
+import com.example.usermanager.entity.AuditLog;   // ❌ 删除此行
+import com.example.usermanager.entity.User;
+...
+
+// 修改后
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.usermanager.annotation.AuditLog;  // ✅ 保留注解的短名 import
+import com.example.usermanager.entity.User;
+...
+```
+
+#### 步骤二：实体类改用全限定类名引用
+
+将 AuditLogAspect 中所有引用实体类 `AuditLog` 的地方改为全限定类名 `com.example.usermanager.entity.AuditLog`。
+
+**修改前**（第 49 行）：
+```java
+AuditLog auditLog = new AuditLog();
+```
+
+**修改后**：
+```java
+com.example.usermanager.entity.AuditLog auditLog = new com.example.usermanager.entity.AuditLog();
+```
+
+由于后续代码中 `auditLog` 变量已经声明为具体类型，其所有 setter 调用（如 `auditLog.setOperation(...)`、`auditLog.setIp(...)` 等）**无需修改**，Java 编译器可正确推断类型。
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/src/main/java/com/example/usermanager/aspect/AuditLogAspect.java` | 移除 `import com.example.usermanager.entity.AuditLog;`；实体类创建改为全限定类名 `com.example.usermanager.entity.AuditLog` |
+
+---
+
+## 关键代码变更对比
+
+### 修改前的 import 区域
+```java
+// ❌ 两个同名类同时 import，导致歧义
+import com.example.usermanager.annotation.AuditLog;
+import com.example.usermanager.entity.AuditLog;
+```
+
+### 修改后的 import 区域
+```java
+// ✅ 只保留使用频率更高的注解的短名 import
+import com.example.usermanager.annotation.AuditLog;
+// entity.AuditLog 在使用处用全限定类名
+```
+
+### 修改前的变量声明
+```java
+// ❌ 编译器无法确定 AuditLog 指向哪个类
+AuditLog auditLog = new AuditLog();
+```
+
+### 修改后的变量声明
+```java
+// ✅ 明确指定实体类的全限定路径，消除歧义
+com.example.usermanager.entity.AuditLog auditLog = new com.example.usermanager.entity.AuditLog();
+```
+
+---
+
+## 验证方法
+
+### 一、IDE 静态检查验证
+
+1. 打开 `AuditLogAspect.java`，确认 IDE 不再报告红色波浪线
+2. 检查变量 `auditLog` 的所有方法调用（setOperation、setModule 等），IDE 应能正确跳转到实体类的对应方法
+3. 检查注解参数 `auditLogAnnotation.operation()` 等调用，IDE 应能正确跳转到注解属性定义
+
+### 二、Maven 编译验证
+
+```bash
+cd backend
+
+# 1. 清理并编译
+mvn clean compile
+
+# 预期输出：
+# [INFO] BUILD SUCCESS
+# 无 ambiguous reference 错误
+# 无 cannot find symbol 错误
+```
+
+### 三、打包验证
+
+```bash
+# 2. 完整打包
+mvn clean package -DskipTests
+
+# 预期输出：
+# [INFO] BUILD SUCCESS
+# target/ 目录下生成 user-manager-0.0.1-SNAPSHOT.jar
+```
+
+### 四、运行时功能验证
+
+```bash
+# 3. 启动后端
+mvn spring-boot:run
+
+# 4. 登录触发审计日志写入
+curl -X POST http://localhost:8080/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
+
+# 5. 查询审计日志（需携带登录 token）
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8080/api/audit-log/list?pageNum=1&pageSize=10"
+
+# 预期：返回 code=200，records 数组中包含刚才的登录日志
+```
+
+---
+
+## 问题预防建议
+
+### 1. 命名规范：避免不同包下的类重名
+
+| 类型 | 推荐命名模式 | 示例 |
+|-----|------------|------|
+| 自定义注解 | `@XxxOperation` / `@XxxLog` / `@EnableXxx` | `@AuditOperation`、`@LogRecord` |
+| 数据库实体 | 纯业务名词，不加前后缀 | `AuditLog`、`User`、`Role` |
+| DTO / VO | `XxxDTO` / `XxxVO` / `XxxReq` / `XxxResp` | `AuditLogQueryDTO`、`LoginUserVO` |
+
+**本次问题的命名优化建议**：
+- 注解重命名为 `@AuditOperation`，更准确地表达"标记一个需要审计的操作方法"的语义
+- 实体类保留 `AuditLog`，表示"一条审计日志记录"
+
+### 2. IDE 辅助：开启同名类导入检查
+
+- IntelliJ IDEA：`Settings → Editor → Code Style → Java → Imports`
+  - 勾选 "Use fully qualified class names" 可在多同名类时自动用全限定名
+  - 同名类导入时 IDE 会弹出警告，应立即处理，不要忽略
+
+### 3. Code Review 检查清单
+
+在 CR 审计模块相关代码时，重点检查：
+- [ ] 是否存在不同包下的类重名
+- [ ] 是否同时 import 了同名类
+- [ ] 使用全限定类名的地方是否有注释说明原因
+- [ ] 所有新创建的类名是否与现有类重名
+
+### 4. Maven 编译作为门禁
+
+在 CI/CD 流水线中必须包含 `mvn clean compile` 步骤，任何编译错误都应阻断后续流程，防止编译错误的代码合入主干。
+
+---
+
+## 延伸知识：Java 同名类冲突的完整解决方案
+
+当项目中不可避免地需要同时使用多个同名类时，可按以下优先级选择方案：
+
+| 优先级 | 方案 | 适用场景 | 示例 |
+|-------|-----|---------|------|
+| 1️⃣ | **重命名其中一个类** | 类刚创建、尚未大量引用时 | 将注解从 `AuditLog` 改为 `AuditOperation` |
+| 2️⃣ | **使用频率高的保留短名，其余用全限定名** | 一个类大量使用，另一个仅在少数地方使用 | 注解用短名，实体用全限定名 |
+| 3️⃣ | **两个都用全限定名** | 两个类使用频率都不高，或都只在几行用到 | `com.example.foo.Data` 和 `com.example.bar.Data` |
+| 4️⃣ | **使用 import static 区分** | 其中一个是静态工具类的静态方法 | 极少用于类级别的冲突 |
+
+> **原则**：优先通过命名从根源避免冲突；其次才考虑技术层面的 import 处理。

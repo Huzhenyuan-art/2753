@@ -2,7 +2,6 @@ package com.example.usermanager.aspect;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.usermanager.annotation.AuditLog;
-import com.example.usermanager.entity.AuditLog;
 import com.example.usermanager.entity.User;
 import com.example.usermanager.service.AuditLogService;
 import com.example.usermanager.service.UserService;
@@ -47,7 +46,7 @@ public class AuditLogAspect {
     public Object around(ProceedingJoinPoint joinPoint, AuditLog auditLogAnnotation) throws Throwable {
         long startTime = System.currentTimeMillis();
 
-        AuditLog auditLog = new AuditLog();
+        com.example.usermanager.entity.AuditLog auditLog = new com.example.usermanager.entity.AuditLog();
         auditLog.setOperation(auditLogAnnotation.operation());
         auditLog.setModule(auditLogAnnotation.module());
         auditLog.setDescription(auditLogAnnotation.description());
