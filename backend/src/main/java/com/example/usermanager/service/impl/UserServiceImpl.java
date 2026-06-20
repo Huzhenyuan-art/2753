@@ -253,16 +253,24 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public Page<User> pageWithDept(Page<User> page, LambdaQueryWrapper<User> wrapper, Long deptId) {
         if (deptId != null) {
             List<Long> deptIds = deptService.getChildDeptIds(deptId);
-            List<UserDept> userDepts = userDeptMapper.selectList(
-                    new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
-            if (userDepts != null && !userDepts.isEmpty()) {
-                List<Long> userIds = userDepts.stream()
-                        .map(UserDept::getUserId)
-                        .distinct()
-                        .collect(Collectors.toList());
-                wrapper.in(User::getId, userIds);
+            if (deptIds != null && !deptIds.isEmpty()) {
+                List<UserDept> userDepts = userDeptMapper.selectList(
+                        new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
+                if (userDepts != null && !userDepts.isEmpty()) {
+                    List<Long> userIds = userDepts.stream()
+                            .map(UserDept::getUserId)
+                            .distinct()
+                            .collect(Collectors.toList());
+                    if (!userIds.isEmpty()) {
+                        wrapper.in(User::getId, userIds);
+                    } else {
+                        wrapper.eq(User::getId, -1L);
+                    }
+                } else {
+                    wrapper.eq(User::getId, -1L);
+                }
             } else {
-                wrapper.in(User::getId, new ArrayList<>());
+                wrapper.eq(User::getId, -1L);
             }
         }
 
@@ -270,8 +278,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         List<User> records = resultPage.getRecords();
         if (records != null && !records.isEmpty()) {
             List<Long> userIds = records.stream().map(User::getId).collect(Collectors.toList());
-            List<UserDept> allUserDepts = userDeptMapper.selectList(
-                    new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
+            List<UserDept> allUserDepts;
+            if (userIds.isEmpty()) {
+                allUserDepts = new ArrayList<>();
+            } else {
+                allUserDepts = userDeptMapper.selectList(
+                        new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
+            }
             List<Long> allDeptIds = allUserDepts.stream()
                     .map(UserDept::getDeptId)
                     .distinct()

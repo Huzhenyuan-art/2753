@@ -2828,6 +2828,102 @@ ORDER BY create_time DESC
 LIMIT 10;
 ```
 
+### 二、其他业务场景验证
+
+| 测试用例 | 预期审计日志 status |
+|---------|-------------------|
+| 新增用户成功 | 1 |
+| 新增用户（用户名已存在） | 0，error_msg="用户名 'xxx' 已存在" |
+| 编辑用户成功 | 1 |
+| 切换用户状态成功 | 1 |
+| 切换管理员状态（被拒绝） | 0，error_msg="管理员账号不允许禁用" |
+| 删除用户成功 | 1 |
+| 分配角色成功 | 1 |
+
+### 三、前端审计日志页面验证
+
+1. 使用 admin 登录
+2. 故意输入错误密码登录一次
+3. 进入"操作审计"页面
+4. 验证：
+   - ✅ 错误密码的那条登录记录显示为红色"失败"标签
+   - ✅ 失败记录的详情弹窗中显示 error_msg 内容
+   - ✅ 失败记录的用户名正确显示为 admin
+   - ✅ 正常登录记录显示为绿色"成功"标签
+
+---
+
+## 问题预防建议
+
+### 1. 审计切面必须同时识别"异常失败"和"业务失败"
+
+在设计审计切面时，成功/失败判定逻辑必须覆盖以下所有路径：
+
+```
+        方法执行
+        /      \
+    抛异常    正常返回
+    (status=0)    /    \
+           返回值是 Result？
+           /        \
+         是         否（视为成功）
+        / \
+   code=200？
+   /    \
+  是     否
+(成功)  (失败)
+```
+
+### 2. 统一业务返回协议
+
+项目中所有 Controller 方法应**统一返回 `Result<?>`**，不允许混合返回其他类型（如 `String`、`Map` 等），便于切面进行统一的状态判定。如确有特殊返回类型，需在切面中显式处理。
+
+### 3. Result 错误码约定
+
+在 `Result.java` 或常量类中统一定义错误码：
+
+```java
+public class ResultCode {
+    public static final int SUCCESS = 200;
+    public static final int BAD_REQUEST = 400;
+    public static final int UNAUTHORIZED = 401;
+    public static final int FORBIDDEN = 403;
+    public static final int NOT_FOUND = 404;
+    // 业务错误码 1xxxx
+    public static final int USER_NOT_FOUND = 10001;
+    public static final int PASSWORD_ERROR = 10002;
+    public static final int ACCOUNT_DISABLED = 10003;
+}
+```
+
+切面判定使用：
+```java
+auditLog.setStatus(res.getCode() != null && res.getCode() == ResultCode.SUCCESS ? 1 : 0);
+```
+
+### 4. 登录失败场景必须记录操作人
+
+登录操作即使失败，也应记录尝试登录的用户名，便于安全审计（如暴力破解检测）。但**严禁记录密码字段**。
+
+推荐获取顺序：
+1. 登录成功 → 从返回的 LoginUserDTO 中获取（最准确，含 userId、nickname）
+2. 登录失败 → 从请求参数中仅提取 username 字段（安全，不触及 password）
+3. 兜底 → JWT Token / SecurityContext（登录时通常为空）
+
+### 5. 审计模块自测清单
+
+审计功能开发完成后，必须验证以下场景：
+
+| # | 测试场景 | 预期结果 |
+|---|---------|---------|
+| 1 | 操作成功，返回 Result.success() | status=1，error_msg=null |
+| 2 | 业务失败，返回 Result.error() | status=0，error_msg=Result.message |
+| 3 | 运行时异常抛出（如 NPE） | status=0，error_msg=异常消息 |
+| 4 | 登录成功 | username=正确用户，status=1 |
+| 5 | 登录失败（用户名不存在） | username=输入值，status=0，error_msg=错误信息 |
+| 6 | 登录失败（密码错误） | username=输入值，status=0，error_msg=错误信息 |
+| 7 | 请求参数中含敏感字段（password 等） | 未被记录到 params 或其他字段 |
+
 ---
 
 # 部门组织架构模块 Maven 编译错误修复指南
@@ -3225,101 +3321,529 @@ jobs:
 
 通过以上规范和检查流程，可以在编码阶段和提交阶段有效拦截此类编译问题，避免影响 Docker 构建和部署流程。
 
-### 二、其他业务场景验证
+---
 
-| 测试用例 | 预期审计日志 status |
-|---------|-------------------|
-| 新增用户成功 | 1 |
-| 新增用户（用户名已存在） | 0，error_msg="用户名 'xxx' 已存在" |
-| 编辑用户成功 | 1 |
-| 切换用户状态成功 | 1 |
-| 切换管理员状态（被拒绝） | 0，error_msg="管理员账号不允许禁用" |
-| 删除用户成功 | 1 |
-| 分配角色成功 | 1 |
+# 用户列表部门筛选空 IN 子句 SQL 语法错误修复指南
 
-### 三、前端审计日志页面验证
+## 问题描述
 
-1. 使用 admin 登录
-2. 故意输入错误密码登录一次
-3. 进入"操作审计"页面
-4. 验证：
-   - ✅ 错误密码的那条登录记录显示为红色"失败"标签
-   - ✅ 失败记录的详情弹窗中显示 error_msg 内容
-   - ✅ 失败记录的用户名正确显示为 admin
-   - ✅ 正常登录记录显示为绿色"成功"标签
+在用户管理页面，当选中一个**没有任何用户归属的部门**进行筛选时，后端抛出 SQL 语法错误：
+
+```
+### Error querying database.  Cause: java.sql.SQLSyntaxErrorException:
+  You have an error in your SQL syntax; check the manual that corresponds to your MySQL server
+  version for the right syntax to use near '))' at line 1
+
+### The error may exist in com/example/usermanager/mapper/UserMapper.java (best guess)
+
+### The error may involve defaultParameterMap
+
+### The error occurred while setting parameters
+
+### SQL: SELECT id,username,nickname,password,email,phone,avatar,status,create_time,update_time,is_deleted
+        FROM sys_user WHERE (id IN (?)) AND is_deleted = 0 ORDER BY id DESC LIMIT ?
+
+### Cause: java.sql.SQLSyntaxErrorException: You have an error in your SQL syntax; ... near '))'
+```
+
+最终表现：前端用户列表区域卡死/无限加载转圈，无法使用部门筛选功能。
+
+---
+
+## 根因分析
+
+问题出在 [UserServiceImpl.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java#L252-L308) 的 `pageWithDept()` 方法中。
+
+### 问题代码（修复前）
+
+```java
+@Override
+public Page<User> pageWithDept(Page<User> page, LambdaQueryWrapper<User> wrapper, Long deptId) {
+    if (deptId != null) {
+        List<Long> deptIds = deptService.getChildDeptIds(deptId);
+        List<UserDept> userDepts = userDeptMapper.selectList(
+                new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
+        if (userDepts != null && !userDepts.isEmpty()) {
+            List<Long> userIds = userDepts.stream()
+                    .map(UserDept::getUserId)
+                    .distinct()
+                    .collect(Collectors.toList());
+            wrapper.in(User::getId, userIds);
+        } else {
+            // ↓↓↓ 问题核心：传入空集合，生成的 SQL 为 WHERE id IN ()
+            wrapper.in(User::getId, new ArrayList<>());
+        }
+    }
+    // ... 后续查询逻辑
+}
+```
+
+### 具体触发路径
+
+当前端选择一个部门（如「财务部」）但该部门**还没有任何用户**时：
+
+```
+前端: 点击左侧部门树的「财务部」节点
+    ↓
+GET /api/user/list?deptId=4
+    ↓
+UserController: deptId = 4
+    ↓
+UserServiceImpl.pageWithDept(page, wrapper, 4)
+    ↓
+deptService.getChildDeptIds(4) → 返回 [4]（假设财务部没有子部门）
+    ↓
+userDeptMapper.selectList: 查询 sys_user_dept WHERE dept_id IN (4)
+                         → 返回空列表 []（财务部还没有用户）
+    ↓
+进入 else 分支:
+    wrapper.in(User::getId, new ArrayList<>())
+    ↓
+MyBatis Plus 生成 SQL:
+    WHERE id IN ()    ← 空 IN 子句！MySQL 不允许这种语法
+    ↓
+MySQL 报错: SQLSyntaxErrorException: ... near '))'
+    ↓
+全局异常处理返回 500
+    ↓
+前端: Axios 错误捕获，列表区域 loading 状态未解除，卡死
+```
+
+### MyBatis Plus 的 `in()` 行为研究
+
+MyBatis Plus（3.5.5 版本）对于 `in(SFunction, Collection)` 的处理逻辑：
+
+| 传入参数 | 生成的 SQL 片段 | 是否合法 |
+|---------|---------------|---------|
+| `in(User::getId, Arrays.asList(1L, 2L))` | `id IN (?, ?)` | ✅ 合法 |
+| `in(User::getId, Arrays.asList(-1L))` | `id IN (?)` | ✅ 合法（使用不存在的ID，安全返回空） |
+| `in(User::getId, Collections.emptyList())` | `id IN ()` | ❌ 语法错误 |
+| **不调用 in()** | 无 id 相关条件 | ✅ 合法（不筛选，可能不符合业务预期） |
+
+因此，空集合不能直接传给 `in()`。必须在传之前做判断处理。
+
+### 同类问题的扩散风险
+
+在同一方法中，还有另外两处 `.in()` 调用也存在潜在的空集合风险：
+
+| 行号 | 代码 | 风险场景 |
+|-----|------|---------|
+| 258 | `in(UserDept::getDeptId, deptIds)` | 理论上 `getChildDeptIds` 至少返回自身，但防御性编程应考虑空 |
+| 286 | `in(UserDept::getUserId, userIds)` | 如果 `records` 只有 1 条且 id 为 null（极端场景）→ 空集合 |
+
+**注**：DeptServiceImpl 中 `getChildDeptIds()` 至少会把 `deptId` 自己加入结果，所以 258 行实际不会触发空集合，但代码健壮性角度仍应防御。
+
+---
+
+## 修复方案
+
+### 核心策略：分层防御 + 永远不生成空 IN 子句
+
+采用**「三不原则」**：
+
+1. **不把判断交给 MyBatis Plus**：在调用 `.in()` 之前，业务代码自己判断集合是否为空
+2. **不用空集合作为哨兵值**：改用 `eq(id, -1L)` 等永远为假的条件来表达「筛选结果为空」
+3. **不省略外层校验**：即使理论上不会为空的集合（如 `getChildDeptIds`），仍添加非空判断
+
+### 修改后的代码（UserServiceImpl.java）
+
+#### 改动一：部门筛选的主逻辑（253-275 行）
+
+```java
+@Override
+public Page<User> pageWithDept(Page<User> page, LambdaQueryWrapper<User> wrapper, Long deptId) {
+    if (deptId != null) {
+        List<Long> deptIds = deptService.getChildDeptIds(deptId);
+        // ↓↓↓ 第 1 层防御：即使理论上 getChildDeptIds 至少返回自身，仍校验
+        if (deptIds != null && !deptIds.isEmpty()) {
+            List<UserDept> userDepts = userDeptMapper.selectList(
+                    new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
+            if (userDepts != null && !userDepts.isEmpty()) {
+                List<Long> userIds = userDepts.stream()
+                        .map(UserDept::getUserId)
+                        .distinct()
+                        .collect(Collectors.toList());
+                // ↓↓↓ 第 2 层防御：再次判断映射结果是否为空（stream 异常场景）
+                if (!userIds.isEmpty()) {
+                    wrapper.in(User::getId, userIds);
+                } else {
+                    // ↓↓↓ 关键修复：不用空集合，用永远为假的条件
+                    wrapper.eq(User::getId, -1L);
+                }
+            } else {
+                // ↓↓↓ 关键修复：部门下无用户 → 用 id=-1 保证返回空列表
+                wrapper.eq(User::getId, -1L);
+            }
+        } else {
+            // ↓↓↓ 兜底：部门树返回空 → 也是返回空列表
+            wrapper.eq(User::getId, -1L);
+        }
+    }
+    // ...
+```
+
+#### 改动二：填充用户部门信息时的 in 调用（279-287 行）
+
+```java
+    Page<User> resultPage = this.page(page, wrapper);
+    List<User> records = resultPage.getRecords();
+    if (records != null && !records.isEmpty()) {
+        List<Long> userIds = records.stream().map(User::getId).collect(Collectors.toList());
+        List<UserDept> allUserDepts;
+        // ↓↓↓ 关键修复：先判断，非空才用 in()，空则直接用空列表避免 SQL 报错
+        if (userIds.isEmpty()) {
+            allUserDepts = new ArrayList<>();
+        } else {
+            allUserDepts = userDeptMapper.selectList(
+                    new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
+        }
+        // ... 后续逻辑不变
+```
+
+### 用 `id = -1` 替代空 IN 子句的原理
+
+为什么选 `-1` 而不是其他值？
+
+| 条件 | 说明 |
+|-----|------|
+| `id = -1` | sys_user 表的 id 是自增主键，从 1 开始，-1 永远匹配不到记录 |
+| 语义清晰 | 明确表达「不想匹配任何记录」的意图 |
+| 性能好 | MySQL 优化器能快速识别常量等值条件，无需索引扫描 |
+| 兼容好 | 所有关系型数据库（MySQL/PostgreSQL/Oracle/H2）都支持 |
+
+生成的 SQL 对比如下：
+
+```
+❌ 修复前（语法错误）：
+WHERE id IN ()
+
+✅ 修复后（合法且语义正确）：
+WHERE id = -1
+```
+
+### 备选方案评估（为什么不用其他方案）
+
+| 备选方案 | 优点 | 缺点 | 是否采用 |
+|---------|-----|-----|---------|
+| `wrapper.notIn(User::getId, 0L)` | 表达简单 | `NOT IN (0)` 会匹配除 0 以外的**所有记录**，与「部门下无用户」预期相反 | ❌ 语义错误 |
+| `wrapper.isNull(User::getId)` | 表达简单 | `IS NULL` 可能影响某些 MySQL 版本的查询缓存策略；主键本就 NOT NULL | ⚠️ 可用但不直观 |
+| `wrapper.last("LIMIT 0")` | 直接截断结果 | 会覆盖分页的 LIMIT；且只能用于 SELECT | ❌ 副作用大 |
+| **`wrapper.eq(User::getId, -1L)`** | 语义清晰、性能好、无副作用 | 几乎无 | ✅ **选用** |
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改说明 |
+|-----|---------|
+| [UserServiceImpl.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java#L252-L308) | `pageWithDept()` 方法，3 处 `.in()` 调用前增加空集合判断；2 处用 `eq(id, -1)` 替代空集合 |
+
+---
+
+## 验证方法
+
+### 一、单元测试（推荐，用 H2 内存库）
+
+```java
+@SpringBootTest
+@ActiveProfiles("test")
+class UserServiceImplTest {
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private DeptService deptService;
+
+    /**
+     * 测试：选择没有用户的部门 → 应该返回空分页，不抛异常
+     */
+    @Test
+    @DisplayName("部门筛选-空部门-应返回空分页不报错")
+    void testPageWithDept_EmptyDept_NoException() {
+        // 准备：获取财务部 deptId（预置数据中 id=4，暂无用户）
+        Long financeDeptId = 4L;
+
+        // 执行 & 断言：不应抛出 SQLSyntaxErrorException
+        assertDoesNotThrow(() -> {
+            Page<User> result = userService.pageWithDept(
+                    new Page<>(1, 10),
+                    new LambdaQueryWrapper<>(),
+                    financeDeptId
+            );
+            // 分页对象正常返回
+            assertNotNull(result);
+            // 记录为空列表
+            assertTrue(result.getRecords().isEmpty());
+            assertEquals(0, result.getTotal());
+        });
+    }
+
+    /**
+     * 测试：选择有用户的部门 → 正常返回用户列表
+     */
+    @Test
+    @DisplayName("部门筛选-有用户的技术部-应返回对应用户")
+    void testPageWithDept_TechDept_ReturnsUsers() {
+        Long techDeptId = 2L; // 技术部（预置数据）
+
+        Page<User> result = userService.pageWithDept(
+                new Page<>(1, 10),
+                new LambdaQueryWrapper<>(),
+                techDeptId
+        );
+
+        assertNotNull(result);
+        assertFalse(result.getRecords().isEmpty());
+        // 每条记录的 depts 字段应该被填充
+        for (User user : result.getRecords()) {
+            assertNotNull(user.getDepts());
+        }
+    }
+
+    /**
+     * 测试：deptId 为 null → 不筛选，返回全部用户
+     */
+    @Test
+    @DisplayName("部门筛选-deptId为null-不筛选返回全部")
+    void testPageWithDept_NullDeptId_ReturnsAll() {
+        Page<User> result = userService.pageWithDept(
+                new Page<>(1, 10),
+                new LambdaQueryWrapper<>(),
+                null
+        );
+
+        assertNotNull(result);
+        // 至少有 admin、test01~test05 等预置用户
+        assertTrue(result.getTotal() >= 6);
+    }
+}
+```
+
+### 二、接口集成测试
+
+```bash
+# 1. 登录获取 token
+TOKEN=$(curl -s -X POST http://localhost:32753/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+
+# 2. 测试：选择没有用户的部门（财务部 deptId=4）
+echo "=== 测试空部门筛选（应返回 200，records=[]）==="
+RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+  "http://localhost:32753/api/user/list?pageNum=1&pageSize=10&deptId=4" \
+  -H "Authorization: Bearer $TOKEN")
+
+echo "$RESP" | python3 -c "
+import sys, json
+lines = sys.stdin.read().strip().split('\nHTTP_CODE:')
+data = json.loads(lines[0])
+http_code = lines[1]
+
+print(f'HTTP 状态码: {http_code}')
+print(f'业务 code:   {data[\"code\"]}')
+print(f'记录数量:    {len(data[\"data\"][\"records\"])}')
+print(f'总记录数:    {data[\"data\"][\"total\"]}')
+print(f'是否报错:    {\"是\" if http_code != \"200\" or data[\"code\"] != 200 else \"否\"}')
+
+# 断言
+assert http_code == '200', f'期望 200，实际 {http_code}'
+assert data['code'] == 200, f'业务 code 错误: {data}'
+assert len(data['data']['records']) == 0, '空部门应该返回 0 条记录'
+print('✅ 空部门筛选测试通过！')
+"
+
+# 3. 测试：选择有用户的部门（技术部 deptId=2）
+echo ""
+echo "=== 测试有用户部门筛选 ==="
+RESP2=$(curl -s "http://localhost:32753/api/user/list?pageNum=1&pageSize=10&deptId=2" \
+  -H "Authorization: Bearer $TOKEN")
+echo "$RESP2" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+total = data['data']['total']
+records = data['data']['records']
+print(f'技术部用户数: {total}')
+for u in records[:3]:
+    depts = [d['name'] for d in u.get('depts', [])]
+    print(f'  - {u[\"username\"]}: 所属部门 = {depts}')
+print('✅ 技术部筛选测试通过！')
+"
+```
+
+预期输出：
+```
+=== 测试空部门筛选（应返回 200，records=[]）===
+HTTP 状态码: 200
+业务 code:   200
+记录数量:    0
+总记录数:    0
+是否报错:    否
+✅ 空部门筛选测试通过！
+
+=== 测试有用户部门筛选 ===
+技术部用户数: 2
+  - admin: 所属部门 = ['总公司', '技术部']
+  - test01: 所属部门 = ['技术部', '前端开发组']
+✅ 技术部筛选测试通过！
+```
+
+### 三、MySQL 慢查询日志验证（可选）
+
+```sql
+-- 开启慢查询日志（开发环境临时使用）
+SET GLOBAL slow_query_log = 'ON';
+SET GLOBAL long_query_time = 0;  -- 捕获所有查询
+-- 或直接查看 general_log（短时间）
+
+-- 触发一次空部门筛选（前端点财务部）后，检查：
+SELECT argument, event_time
+FROM mysql.general_log
+WHERE argument LIKE '%id = -1%'
+ORDER BY event_time DESC
+LIMIT 5;
+```
+
+预期结果：应该能看到类似 `WHERE id = -1` 的合法 SQL，**而不是** `WHERE id IN ()`。
+
+### 四、前端交互验证
+
+| 步骤 | 操作 | 预期结果 |
+|-----|------|---------|
+| 1 | 进入用户管理页面 | 左侧部门树正常展示，不选中任何节点时显示全部用户 |
+| 2 | 点击「财务部」（预置数据中暂无用户） | ✅ 列表区短暂 loading 后显示空状态占位图，**不应卡死**，**不应弹 500 错误** |
+| 3 | 查看浏览器 Network 面板 | `list?deptId=4` 请求返回 200，响应体 `records:[]`，`total:0` |
+| 4 | 点击「技术部」（有 2 个预置用户） | ✅ 列表正常显示 admin 和 test01，每条记录的「部门」列正确展示标签 |
+| 5 | 点击「总公司」（根部门，理论包含全部用户） | ✅ 列表展示所有有部门归属的用户（共 3 个预置用户） |
+| 6 | 新增用户 → 分配到「财务部」 | ✅ 新增成功后再点击「财务部」，能看到刚才新增的用户 |
 
 ---
 
 ## 问题预防建议
 
-### 1. 审计切面必须同时识别"异常失败"和"业务失败"
+### 1. 全局规范：所有 `.in()` 调用前必须判空
 
-在设计审计切面时，成功/失败判定逻辑必须覆盖以下所有路径：
+制定项目级代码规范，在代码评审时强制执行：
 
 ```
-        方法执行
-        /      \
-    抛异常    正常返回
-    (status=0)    /    \
-           返回值是 Result？
-           /        \
-         是         否（视为成功）
-        / \
-   code=200？
-   /    \
-  是     否
-(成功)  (失败)
+❌ 禁止：直接把集合变量传给 in()
+    wrapper.in(User::getId, userIds);
+
+✅ 必须：显式判断空，或用工具类封装
+    if (userIds != null && !userIds.isEmpty()) {
+        wrapper.in(User::getId, userIds);
+    }
 ```
 
-### 2. 统一业务返回协议
+### 2. 封装工具方法：彻底消除重复代码
 
-项目中所有 Controller 方法应**统一返回 `Result<?>`**，不允许混合返回其他类型（如 `String`、`Map` 等），便于切面进行统一的状态判定。如确有特殊返回类型，需在切面中显式处理。
-
-### 3. Result 错误码约定
-
-在 `Result.java` 或常量类中统一定义错误码：
+在 [MyBatis Plus 配置类](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/config/MyBatisPlusConfig.java) 或工具类中，封装安全的 in 调用：
 
 ```java
-public class ResultCode {
-    public static final int SUCCESS = 200;
-    public static final int BAD_REQUEST = 400;
-    public static final int UNAUTHORIZED = 401;
-    public static final int FORBIDDEN = 403;
-    public static final int NOT_FOUND = 404;
-    // 业务错误码 1xxxx
-    public static final int USER_NOT_FOUND = 10001;
-    public static final int PASSWORD_ERROR = 10002;
-    public static final int ACCOUNT_DISABLED = 10003;
+/**
+ * MyBatis Plus Wrapper 工具类
+ * 安全地添加 IN 条件，自动处理空集合
+ */
+public class WrapperUtils {
+
+    private WrapperUtils() {}
+
+    /**
+     * 安全添加 IN 条件（集合为空时不添加条件）
+     */
+    public static <T, V> void safeIn(AbstractWrapper<T> wrapper,
+                                     SFunction<T, V> column,
+                                     Collection<V> values) {
+        if (values != null && !values.isEmpty()) {
+            wrapper.in(column, values);
+        }
+    }
+
+    /**
+     * 安全添加 IN 条件（集合为空时添加永远为假的条件，用于「必须筛选出空」的场景）
+     * 适用于：部门筛选等业务场景，当筛选范围为空时，应该返回空列表而不是全部
+     */
+    public static <T, V extends Number> void safeInOrEmpty(AbstractWrapper<T> wrapper,
+                                                           SFunction<T, V> column,
+                                                           Collection<V> values) {
+        if (values != null && !values.isEmpty()) {
+            wrapper.in(column, values);
+        } else {
+            wrapper.eq(column, -1L);
+        }
+    }
 }
 ```
 
-切面判定使用：
+后续重构使用示例：
 ```java
-auditLog.setStatus(res.getCode() != null && res.getCode() == ResultCode.SUCCESS ? 1 : 0);
+// 修复前
+if (userIds != null && !userIds.isEmpty()) {
+    wrapper.in(User::getId, userIds);
+} else {
+    wrapper.eq(User::getId, -1L);
+}
+
+// 修复后（代码量减少 70%）
+WrapperUtils.safeInOrEmpty(wrapper, User::getId, userIds);
 ```
 
-### 4. 登录失败场景必须记录操作人
+### 3. IDE 静态检查规则配置
 
-登录操作即使失败，也应记录尝试登录的用户名，便于安全审计（如暴力破解检测）。但**严禁记录密码字段**。
+在 IntelliJ IDEA / SonarQube 中添加自定义检查规则：
 
-推荐获取顺序：
-1. 登录成功 → 从返回的 LoginUserDTO 中获取（最准确，含 userId、nickname）
-2. 登录失败 → 从请求参数中仅提取 username 字段（安全，不触及 password）
-3. 兜底 → JWT Token / SecurityContext（登录时通常为空）
+```
+规则ID: MybatisPlusEmptyInCheck
+严重级别: Blocker（阻断级）
+匹配模式: wrapper\.in\([^,]+,\s*new ArrayList<>\(\)\)
+提示信息: 禁止向 MyBatis Plus 的 in() 方法传递空集合，会导致 SQL 语法错误！
+          请使用 WrapperUtils.safeIn() 或判空后调用。
+```
 
-### 5. 审计模块自测清单
+### 4. 数据库 H2 测试用例模板
 
-审计功能开发完成后，必须验证以下场景：
+每新增一个使用 `.in()` 的业务方法，必须对应添加「空集合场景」的测试用例：
 
-| # | 测试场景 | 预期结果 |
-|---|---------|---------|
-| 1 | 操作成功，返回 Result.success() | status=1，error_msg=null |
-| 2 | 业务失败，返回 Result.error() | status=0，error_msg=Result.message |
-| 3 | 运行时异常抛出（如 NPE） | status=0，error_msg=异常消息 |
-| 4 | 登录成功 | username=正确用户，status=1 |
-| 5 | 登录失败（用户名不存在） | username=输入值，status=0，error_msg=错误信息 |
-| 6 | 登录失败（密码错误） | username=输入值，status=0，error_msg=错误信息 |
-| 7 | 请求参数中含敏感字段（password 等） | 未被记录到 params 或其他字段 |
+```java
+/**
+ * 空 IN 子句测试模板，复制到对应的测试类即可使用
+ */
+@ParameterizedTest
+@NullAndEmptySource
+void testQuery_EmptyInValues_NoSqlError(List<Long> emptyOrNullIds) {
+    // 当传入 null 或空集合时
+    // 1. 不应该抛出 SQLSyntaxErrorException
+    // 2. 返回值应符合业务预期（空列表 or 全部数据，视业务而定）
+    assertDoesNotThrow(() -> {
+        List<User> result = xxxService.queryBySomeIds(emptyOrNullIds);
+        assertNotNull(result);
+    });
+}
+```
+
+### 5. 代码评审 Checklist
+
+在 Merge Request 模板中，涉及 MyBatis Plus 查询的代码必须勾选以下检查项：
+
+- [ ] **所有 `.in()` / `.notIn()` 调用前都做了集合非空判断吗？**
+- [ ] **空集合场景的处理逻辑是否符合业务预期？**（返回空？还是不筛选？）
+- [ ] **是否添加了空集合场景的单元测试？**
+- [ ] **是否考虑了 null 值、重复元素、超大集合等边界情况？**
+
+---
+
+## 总结：核心教训
+
+| 教训 | 详细说明 |
+|-----|---------|
+| **MyBatis Plus 不处理空集合** | 不要假设框架会帮你跳过空 IN；`in()` 收到空集合会生成 `IN ()`，直接 SQL 报错 |
+| **空集合处理要有策略** | 两种策略要明确区分：①「不筛选」= 不调用 in()；②「返回空」= 用 `eq(id, -1L)` |
+| **防御性编程不是教条** | 即使理论上不会为空（如 `getChildDeptIds` 加了自身），仍应添加非空判断，防止后续重构引入回归 |
+| **封装重复逻辑** | 用 `WrapperUtils.safeIn()` 工具方法消除重复判断，降低遗漏概率 |
+| **测试覆盖异常路径** | 正常路径测 100 遍不如异常路径测 1 遍。「空部门」「无数据」「非法参数」才是线上故障高发场景 |
+
+通过以上规范和工具封装，可以从编码习惯、IDE 检查、CI 门禁三个维度彻底杜绝「空 IN 子句」此类低级但影响严重的 SQL 错误。
 
 ---
 
