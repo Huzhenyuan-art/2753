@@ -33,7 +33,7 @@ services:
     volumes:
       - avatar_data:/app/uploads/avatars
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12

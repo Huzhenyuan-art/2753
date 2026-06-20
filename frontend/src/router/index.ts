@@ -5,6 +5,7 @@ import Dept from '@/views/Dept.vue'
 import Profile from '@/views/Profile.vue'
 import ChangePassword from '@/views/ChangePassword.vue'
 import AuditLog from '@/views/AuditLog.vue'
+import SystemMonitor from '@/views/SystemMonitor.vue'
 import { getAccessToken } from '@/utils/token'
 
 const router = createRouter({
@@ -27,6 +28,12 @@ const router = createRouter({
       name: 'Dept',
       component: Dept,
       meta: { title: '部门管理', requiresAuth: true }
+    },
+    {
+      path: '/system-monitor',
+      name: 'SystemMonitor',
+      component: SystemMonitor,
+      meta: { title: '系统监控', requiresAuth: true }
     },
     {
       path: '/audit-log',

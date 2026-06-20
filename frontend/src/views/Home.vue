@@ -12,6 +12,9 @@
           <el-button type="primary" text @click="goDept">
             <el-icon><OfficeBuilding /></el-icon>部门管理
           </el-button>
+          <el-button v-if="userStore.isAdmin" type="primary" text @click="goSystemMonitor">
+            <el-icon><Monitor /></el-icon>系统监控
+          </el-button>
           <div class="current-roles" v-if="userStore.userInfo?.roles?.length">
             <el-tag v-for="role in userStore.userInfo.roles" :key="role.id" type="primary" effect="light" round class="role-tag">
               {{ role.name }}
@@ -496,7 +499,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete, OfficeBuilding, Connection, Download, Top, Plus } from '@element-plus/icons-vue'
+import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete, OfficeBuilding, Connection, Download, Top, Plus, Monitor } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 import type { DeptInfo } from '@/store/user'
@@ -1190,6 +1193,10 @@ const goAuditLog = () => {
 
 const goDept = () => {
   router.push('/dept')
+}
+
+const goSystemMonitor = () => {
+  router.push('/system-monitor')
 }
 
 const EXCEL_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'

@@ -2,6 +2,7 @@ package com.example.usermanager.security;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.usermanager.entity.User;
+import com.example.usermanager.service.OnlineUserService;
 import com.example.usermanager.service.UserService;
 import com.example.usermanager.util.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,13 +40,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Lazy
     private UserService userService;
 
+    @Autowired
+    @Lazy
+    private OnlineUserService onlineUserService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String path = request.getRequestURI();
-        if ("/api/health".equals(path) || "/api/user/login".equals(path) || "/api/user/refresh".equals(path)) {
+        if ("/actuator/health".equals(path) || "/api/health".equals(path) || "/api/user/login".equals(path) || "/api/user/refresh".equals(path)) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -118,6 +123,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     username, null, authorities);
             SecurityContextHolder.getContext().setAuthentication(authentication);
+
+            onlineUserService.recordUserActivity(username);
         }
 
         filterChain.doFilter(request, response);
