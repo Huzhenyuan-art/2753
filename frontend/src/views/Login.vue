@@ -157,7 +157,7 @@ const handleLogin = async () => {
     localStorage.removeItem('saved_login')
     ElMessage.success('登录成功')
     const redirect = route.query.redirect as string
-    router.push(redirect || '/')
+    router.replace(redirect || '/')
   } catch (error: any) {
     console.error(error)
     handleLoginError(error)

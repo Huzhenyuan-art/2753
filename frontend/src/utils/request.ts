@@ -29,10 +29,10 @@ const instance = axios.create({
 
 function forceLogout(message: string = '登录已过期，请重新登录') {
   clearAllTokens()
-  const currentPath = router.currentRoute.value.fullPath
-  if (currentPath !== '/login') {
+  const currentRoute = router.currentRoute.value
+  if (currentRoute.path !== '/login') {
     ElMessage.error(message)
-    router.push({ path: '/login', query: { redirect: currentPath } })
+    router.replace({ path: '/login', query: { redirect: currentRoute.fullPath } })
   }
 }
 
