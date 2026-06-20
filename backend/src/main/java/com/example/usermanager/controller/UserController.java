@@ -7,6 +7,7 @@ import com.example.usermanager.common.Result;
 import com.example.usermanager.dto.ChangePasswordDTO;
 import com.example.usermanager.dto.LoginUserDTO;
 import com.example.usermanager.dto.RefreshTokenDTO;
+import com.example.usermanager.dto.UpdateProfileDTO;
 import com.example.usermanager.dto.UserImportResult;
 import com.example.usermanager.entity.Dept;
 import com.example.usermanager.entity.Permission;
@@ -268,6 +269,20 @@ public class UserController {
         dto.setPermissionCodes(permissionCodes);
         dto.setDepts(depts);
         return Result.success(dto);
+    }
+
+    @PutMapping("/profile")
+    @AuditLog(operation = "UPDATE_PROFILE", module = "用户管理", description = "修改个人资料", recordParams = false)
+    public Result<String> updateProfile(@Valid @RequestBody UpdateProfileDTO dto) {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        User user = userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) {
+            return Result.error(404, "用户不存在");
+        }
+        user.setNickname(dto.getNickname());
+        user.setEmail(dto.getEmail());
+        userService.updateById(user);
+        return Result.success("个人资料更新成功");
     }
 
     @GetMapping("/{id}/roles")

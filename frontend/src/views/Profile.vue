@@ -65,7 +65,7 @@
 
             <el-divider />
 
-            <el-form label-position="top" class="info-form">
+            <el-form ref="profileFormRef" :model="formData" :rules="profileRules" label-position="top" class="info-form">
               <el-row :gutter="24">
                 <el-col :span="12">
                   <el-form-item label="用户名">
@@ -73,15 +73,15 @@
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
-                  <el-form-item label="昵称">
-                    <el-input :value="formData.nickname" disabled />
+                  <el-form-item label="昵称" prop="nickname">
+                    <el-input v-model="formData.nickname" placeholder="请输入昵称" :disabled="!editing" />
                   </el-form-item>
                 </el-col>
               </el-row>
               <el-row :gutter="24">
                 <el-col :span="12">
-                  <el-form-item label="电子邮箱">
-                    <el-input :value="formData.email" disabled />
+                  <el-form-item label="电子邮箱" prop="email">
+                    <el-input v-model="formData.email" placeholder="请输入电子邮箱" :disabled="!editing" />
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
@@ -104,6 +104,13 @@
                   </el-form-item>
                 </el-col>
               </el-row>
+              <div class="form-actions" v-if="editing">
+                <el-button @click="cancelEdit" round>取 消</el-button>
+                <el-button type="primary" :loading="saveLoading" @click="handleSaveProfile" round>保存修改</el-button>
+              </div>
+              <div class="form-actions" v-else>
+                <el-button type="primary" plain @click="startEdit" round>编辑资料</el-button>
+              </div>
             </el-form>
           </div>
         </div>
@@ -116,6 +123,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
 import { Upload, Lock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import request from '@/utils/request'
@@ -124,9 +132,20 @@ const router = useRouter()
 const userStore = useUserStore()
 
 const loading = ref(false)
+const saveLoading = ref(false)
+const editing = ref(false)
 const avatarUploading = ref(false)
+const profileFormRef = ref<FormInstance>()
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
 const avatarPreview = ref('')
+
+const profileRules: FormRules = {
+  nickname: [{ required: true, message: '请输入昵称', trigger: 'blur' }],
+  email: [
+    { required: true, message: '请输入电子邮箱', trigger: 'blur' },
+    { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' },
+  ],
+}
 
 const resolveAvatarUrl = (avatar?: string) => {
   if (!avatar) return defaultAvatar
@@ -157,6 +176,39 @@ const syncFormFromStore = () => {
     formData.status = userStore.userInfo.status
     formData.createTime = userStore.userInfo.createTime
     formData.updateTime = userStore.userInfo.updateTime
+  }
+}
+
+let editBackup = { nickname: '', email: '' }
+
+const startEdit = () => {
+  editBackup = { nickname: formData.nickname, email: formData.email }
+  editing.value = true
+}
+
+const cancelEdit = () => {
+  formData.nickname = editBackup.nickname
+  formData.email = editBackup.email
+  editing.value = false
+  profileFormRef.value?.clearValidate()
+}
+
+const handleSaveProfile = async () => {
+  if (!profileFormRef.value) return
+  await profileFormRef.value.validate()
+  saveLoading.value = true
+  try {
+    await request.put('/user/profile', {
+      nickname: formData.nickname,
+      email: formData.email,
+    })
+    userStore.setUserInfo({ nickname: formData.nickname, email: formData.email })
+    editing.value = false
+    ElMessage.success('个人资料更新成功')
+  } catch {
+    ElMessage.error('保存失败，请稍后重试')
+  } finally {
+    saveLoading.value = false
   }
 }
 
@@ -382,5 +434,12 @@ onMounted(loadUserInfo)
 
 .info-form {
   padding-top: 16px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 24px;
 }
 </style>
