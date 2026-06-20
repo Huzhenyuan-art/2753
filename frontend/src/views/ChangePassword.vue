@@ -84,26 +84,29 @@
                   </div>
                   <span class="strength-text" :style="{ color: strengthColor }">{{ strengthLabel }}</span>
                 </div>
-                <div class="password-rules">
-                  <p :class="{ valid: rulesCheck.minLength, invalid: !rulesCheck.minLength }">
-                    <el-icon><Check v-if="rulesCheck.minLength" /><Close v-else /></el-icon>
-                    至少8个字符
-                  </p>
-                  <p :class="{ valid: rulesCheck.hasUpper, invalid: !rulesCheck.hasUpper }">
-                    <el-icon><Check v-if="rulesCheck.hasUpper" /><Close v-else /></el-icon>
-                    包含大写字母
-                  </p>
-                  <p :class="{ valid: rulesCheck.hasLower, invalid: !rulesCheck.hasLower }">
-                    <el-icon><Check v-if="rulesCheck.hasLower" /><Close v-else /></el-icon>
-                    包含小写字母
-                  </p>
-                  <p :class="{ valid: rulesCheck.hasDigit, invalid: !rulesCheck.hasDigit }">
-                    <el-icon><Check v-if="rulesCheck.hasDigit" /><Close v-else /></el-icon>
-                    包含数字
-                  </p>
-                  <p :class="{ valid: rulesCheck.hasSpecial, invalid: !rulesCheck.hasSpecial }">
-                    <el-icon><Check v-if="rulesCheck.hasSpecial" /><Close v-else /></el-icon>
-                    包含特殊字符
+                <div class="password-rules-box">
+                  <p class="rules-title">密码强度要求：</p>
+                  <div class="password-rules">
+                    <p :class="{ valid: rulesCheck.minLength, invalid: !rulesCheck.minLength }">
+                      <el-icon><Check v-if="rulesCheck.minLength" /><Close v-else /></el-icon>
+                      至少8个字符（最多20个）
+                    </p>
+                    <p :class="{ valid: rulesCheck.hasLetter, invalid: !rulesCheck.hasLetter }">
+                      <el-icon><Check v-if="rulesCheck.hasLetter" /><Close v-else /></el-icon>
+                      包含字母
+                    </p>
+                    <p :class="{ valid: rulesCheck.hasDigit, invalid: !rulesCheck.hasDigit }">
+                      <el-icon><Check v-if="rulesCheck.hasDigit" /><Close v-else /></el-icon>
+                      包含数字
+                    </p>
+                    <p :class="{ valid: rulesCheck.hasSpecial, invalid: !rulesCheck.hasSpecial }">
+                      <el-icon><Check v-if="rulesCheck.hasSpecial" /><Close v-else /></el-icon>
+                      包含特殊字符
+                    </p>
+                  </div>
+                  <p class="rules-hint">
+                    <el-icon><InfoFilled /></el-icon>
+                    需同时满足「至少8个字符」+「字母/数字/特殊字符中的至少两种」，并排除常见弱密码（如 123456、password 等）
                   </p>
                 </div>
               </el-form-item>
@@ -148,7 +151,7 @@
 import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Lock, Check, Close, Warning } from '@element-plus/icons-vue'
+import { Lock, Check, Close, Warning, InfoFilled } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import request from '@/utils/request'
 
@@ -183,7 +186,34 @@ const submitError = reactive({
   message: ''
 })
 
-const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{}|;':",./<>?]).{8,20}$/
+const WEAK_PASSWORDS: Set<string> = new Set([
+  'password', 'password1', 'password123', 'password@123',
+  '123456', '12345678', '123456789', '1234567890',
+  '123123', '123321', '111111', '000000',
+  '654321', '88888888', '666666',
+  'admin', 'admin123', 'admin@123',
+  'qwerty', 'qwerty123', 'qwertyuiop',
+  'letmein', 'welcome', 'iloveyou',
+  'abc123', 'abc@123',
+  'user@123', 'test@123',
+  'pass@123', 'pass@word1',
+  '1q2w3e4r', '1qaz2wsx',
+  'p@ssw0rd', 'p@ssword'
+])
+
+const SPECIAL_REGEX = /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?]/
+
+const isWeakPassword = (pwd: string): boolean => {
+  return WEAK_PASSWORDS.has(pwd.toLowerCase())
+}
+
+const countComplexity = (pwd: string): number => {
+  let count = 0
+  if (/[A-Za-z]/.test(pwd)) count++
+  if (/\d/.test(pwd)) count++
+  if (SPECIAL_REGEX.test(pwd)) count++
+  return count
+}
 
 const validateNewPassword = (_rule: any, value: string, callback: any) => {
   if (!value) {
@@ -192,8 +222,10 @@ const validateNewPassword = (_rule: any, value: string, callback: any) => {
     callback(new Error('密码长度至少8位'))
   } else if (value.length > 20) {
     callback(new Error('密码长度不能超过20位'))
-  } else if (!PASSWORD_REGEX.test(value)) {
-    callback(new Error('密码必须包含大小写字母、数字和特殊字符'))
+  } else if (isWeakPassword(value)) {
+    callback(new Error('密码过于常见，请选择更复杂的密码'))
+  } else if (countComplexity(value) < 2) {
+    callback(new Error('密码需包含字母、数字、特殊字符中的至少两种'))
   } else if (value === formData.oldPassword) {
     callback(new Error('新密码不能与旧密码相同'))
   } else {
@@ -217,24 +249,33 @@ const formRules = {
   confirmPassword: [{ required: true, validator: validateConfirmPassword, trigger: 'blur' }]
 }
 
-const rulesCheck = computed(() => ({
-  minLength: formData.newPassword.length >= 8,
-  hasUpper: /[A-Z]/.test(formData.newPassword),
-  hasLower: /[a-z]/.test(formData.newPassword),
-  hasDigit: /\d/.test(formData.newPassword),
-  hasSpecial: /[!@#$%^&*()_+\-=\[\]{}|;':",./<>?]/.test(formData.newPassword)
-}))
+const rulesCheck = computed(() => {
+  const pwd = formData.newPassword
+  return {
+    minLength: pwd.length >= 8 && pwd.length <= 20,
+    hasLetter: /[A-Za-z]/.test(pwd),
+    hasDigit: /\d/.test(pwd),
+    hasSpecial: SPECIAL_REGEX.test(pwd),
+    isNotWeak: pwd.length > 0 && !isWeakPassword(pwd)
+  }
+})
 
 const strengthPercent = computed(() => {
-  const checks = rulesCheck.value
-  const passed = [checks.minLength, checks.hasUpper, checks.hasLower, checks.hasDigit, checks.hasSpecial]
-    .filter(Boolean).length
-  return (passed / 5) * 100
+  if (!formData.newPassword) return 0
+  const r = rulesCheck.value
+  const complexityCount = countComplexity(formData.newPassword)
+  let score = 0
+
+  if (r.minLength) score += 20
+  score += Math.min(complexityCount, 3) * 20
+  if (r.isNotWeak) score += 20
+
+  return Math.min(score, 100)
 })
 
 const strengthLabel = computed(() => {
   const pct = strengthPercent.value
-  if (pct <= 20) return '非常弱'
+  if (pct <= 20) return '不符合'
   if (pct <= 40) return '弱'
   if (pct <= 60) return '一般'
   if (pct <= 80) return '强'
@@ -291,6 +332,12 @@ const handleSubmit = async () => {
           break
         case 10006:
           submitError.message = '确认密码与新密码不一致'
+          break
+        case 10007:
+          submitError.message = '密码过于常见，请选择更复杂的密码'
+          break
+        case 10008:
+          submitError.message = '密码复杂度不足，需包含字母、数字、特殊字符中的至少两种'
           break
         case 404:
           submitError.message = '用户不存在，请重新登录'
@@ -453,15 +500,25 @@ const handleLogout = () => {
   white-space: nowrap;
 }
 
+.password-rules-box {
+  margin-top: 12px;
+  padding: 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.rules-title {
+  margin: 0 0 8px 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #334155;
+}
+
 .password-rules {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px 16px;
-  margin-top: 12px;
-  padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
 }
 
 .password-rules p {
@@ -479,6 +536,20 @@ const handleLogout = () => {
 
 .password-rules p.invalid {
   color: #94a3b8;
+}
+
+.rules-hint {
+  margin: 10px 0 0 0;
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  color: #475569;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.5;
 }
 
 .submit-error {

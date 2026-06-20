@@ -154,6 +154,10 @@ public class UserController {
                     return Result.error(10005, "新密码不能与旧密码相同");
                 case "CONFIRM_PASSWORD_MISMATCH":
                     return Result.error(10006, "确认密码与新密码不一致");
+                case "WEAK_PASSWORD":
+                    return Result.error(10007, "密码过于常见，请选择更复杂的密码");
+                case "INSUFFICIENT_COMPLEXITY":
+                    return Result.error(10008, "密码复杂度不足，需包含字母、数字、特殊字符中的至少两种");
                 default:
                     return Result.error(500, "密码修改失败，请重试");
             }

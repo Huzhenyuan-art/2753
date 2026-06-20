@@ -3747,3 +3747,319 @@ const doAsync = async () => {
 | **閫昏緫灞?* | 寮傛鍥炶皟涓夐噸瀹堝崼锛坉ialogMode + dialogVisible + id锛?| 闃叉绔炴€佹潯浠跺拰鏃犳晥鐘舵€佹洿鏂?|
 
 **鏍稿績鏁欒**锛氭祻瑙堝櫒鑷姩濉厖鏄竴涓法灞傞棶棰橈紝鍗曚竴灞傛鐨勪慨澶嶆棤娉曞交搴曡В鍐炽€傚繀椤讳粠杈撳叆灞炴€э紙闃茶瘑鍒級銆丏OM 鏇存柊锛堥槻缁曡繃锛夈€侀€昏緫鏍￠獙锛堥槻绔炴€侊級涓変釜灞傞潰鍚屾椂闃插尽銆備笂涓€杞彧淇簡閫昏緫灞傦紝閬楁紡浜嗘渶鍏抽敭鐨勮緭鍏ュ眰闃插尽锛屾墍浠ラ棶棰樹緷鏃у瓨鍦ㄣ€?
+
+---
+
+# 密码强度规则过高修复指南
+
+## 问题描述
+
+用户自助修改密码功能中，原密码强度规则要求**同时包含大小写字母、数字和特殊字符四种组合**（8-20位），规则过于严苛，导致大部分符合业界常规安全标准的密码（如 bc12345、mypassword12! 等）均无法通过校验，严重阻碍用户完成密码修改流程。
+
+### 修复前的错误规则
+
+**后端** [ChangePasswordDTO.java](file:///D:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/ChangePasswordDTO.java#L14)：
+`java
+@Pattern(regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?]).{8,20}$",
+        message = "新密码必须8-20位，包含大小写字母、数字和特殊字符")
+`
+
+**前端** alidateNewPassword：
+`	ypescript
+// 要求四种组合全部满足：大写字母 + 小写字母 + 数字 + 特殊字符
+if (!PASSWORD_REGEX.test(value)) {
+  callback(new Error('密码必须包含大小写字母、数字和特殊字符'))
+}
+`
+
+---
+
+## 修复后的新规则（业界通用安全标准）
+
+| 检查项 | 规则要求 |
+|--------|----------|
+| **长度** | 8-20 个字符 |
+| **复杂度** | 字母（大小写）、数字、特殊字符中的 **至少两种** 组合 |
+| **常见弱密码排除** | 禁止使用 123456、password、dmin123 等常见弱密码（含 30+ 条黑名单） |
+| **其他** | 新密码不能与旧密码相同 |
+
+### 允许通过的密码示例（修复后）
+
+| 密码 | 组合类型 | 说明 |
+|------|----------|------|
+| Abc12345 | 字母 + 数字 | ✅ 两种组合（原规则因缺少特殊字符被拒） |
+| hello123 | 字母 + 数字 | ✅ 两种组合（原规则因缺少大写和特殊字符被拒） |
+| MyPassword! | 字母 + 特殊字符 | ✅ 两种组合（原规则因缺少数字被拒） |
+| 123456!@# | 数字 + 特殊字符 | ✅ 两种组合（原规则因缺少字母被拒） |
+| Hello@123 | 字母 + 数字 + 特殊字符 | ✅ 三种组合（原规则也能通过） |
+
+### 仍然拒绝的密码示例
+
+| 密码 | 拒绝原因 |
+|------|----------|
+| 123456 | 弱密码黑名单 + 只有一种组合 |
+| password | 弱密码黑名单 + 只有一种组合 |
+| bcdefgh | 只有一种组合（只有字母） |
+| 12345678 | 弱密码黑名单 + 只有一种组合 |
+| dmin@123 | 弱密码黑名单 |
+
+---
+
+## 修复方案
+
+### 一、后端：DTO 简化正则，业务层加组合校验 + 弱密码排除
+
+#### 1. 修改 ChangePasswordDTO  只保留长度限制
+
+`java
+// 修复前：@Pattern 正则要求四种组合
+@NotBlank(message = "新密码不能为空")
+@Size(min = 8, max = 20, message = "新密码长度必须为8-20位")  // ✅ 修复后：只用 @Size
+private String newPassword;
+`
+
+#### 2. UserServiceImpl  新增复杂度校验 + 弱密码黑名单
+
+新增方法和常量：
+
+`java
+// 常见弱密码黑名单（30+ 条，大小写不敏感）
+private static final Set<String> WEAK_PASSWORDS = new HashSet<>(Arrays.asList(
+    "password", "password1", "password123", "password@123",
+    "123456", "12345678", "123456789", "1234567890",
+    "123123", "123321", "111111", "000000",
+    "654321", "88888888", "666666",
+    "admin", "admin123", "admin@123",
+    "qwerty", "qwerty123", "qwertyuiop",
+    "letmein", "welcome", "iloveyou",
+    "abc123", "abc@123",
+    "user@123", "test@123",
+    "pass@123", "pass@word1",
+    "1q2w3e4r", "1qaz2wsx",
+    "p@ssw0rd", "p@ssword"
+));
+
+// 统计密码包含的组合类别数（字母/数字/特殊字符）
+private int countPasswordComplexity(String password) {
+    int count = 0;
+    if (password.matches(".*[A-Za-z].*")) count++;   // 字母
+    if (password.matches(".*\\d.*")) count++;         // 数字
+    if (password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?].*")) count++; // 特殊字符
+    return count;
+}
+`
+
+在 changePassword 中增加校验顺序：
+
+`java
+// 1. 先检查是否在弱密码黑名单中（不区分大小写）
+if (WEAK_PASSWORDS.contains(dto.getNewPassword().toLowerCase())) {
+    throw new RuntimeException("WEAK_PASSWORD");
+}
+// 2. 再检查组合类别数是否  2
+if (countPasswordComplexity(dto.getNewPassword()) < 2) {
+    throw new RuntimeException("INSUFFICIENT_COMPLEXITY");
+}
+`
+
+#### 3. UserController  新增错误码映射
+
+`java
+case "WEAK_PASSWORD":
+    return Result.error(10007, "密码过于常见，请选择更复杂的密码");
+case "INSUFFICIENT_COMPLEXITY":
+    return Result.error(10008, "密码复杂度不足，需包含字母、数字、特殊字符中的至少两种");
+`
+
+### 二、前端：修改校验逻辑 + 规则说明 + 强度条重算
+
+#### 1. 新增弱密码黑名单（与后端保持同步）
+
+`	ypescript
+const WEAK_PASSWORDS: Set<string> = new Set([
+  'password', 'password1', 'password123', 'password@123',
+  '123456', '12345678', '123456789', '1234567890',
+  // ... 共 30+ 条，与后端一一对应
+])
+`
+
+#### 2. 自定义 validator  按新规则校验
+
+`	ypescript
+const validateNewPassword = (_rule: any, value: string, callback: any) => {
+  if (!value) callback(new Error('请输入新密码'))
+  else if (value.length < 8) callback(new Error('密码长度至少8位'))
+  else if (value.length > 20) callback(new Error('密码长度不能超过20位'))
+  else if (isWeakPassword(value)) callback(new Error('密码过于常见，请选择更复杂的密码'))
+  else if (countComplexity(value) < 2) callback(new Error('密码需包含字母、数字、特殊字符中的至少两种'))
+  else if (value === formData.oldPassword) callback(new Error('新密码不能与旧密码相同'))
+  else callback()
+}
+`
+
+#### 3. 规则说明 UI 重设计
+
+修复前：5 项独立要求（大小写字母、数字、特殊字符、长度），要求**全部满足**。
+
+修复后：
+- 展示 4 项特征检查：长度、字母、数字、特殊字符
+- 增加**综合提示栏**：「需满足「至少8个字符」+「字母/数字/特殊字符中的至少两种」，并排除常见弱密码」
+- 新增规则标题 + 信息图标，直观清晰
+
+#### 4. 强度条算法重算（5 个维度）
+
+`	ypescript
+const strengthPercent = computed(() => {
+  if (!formData.newPassword) return 0
+  let score = 0
+  if (r.minLength) score += 20                       // 20%：满足长度
+  score += Math.min(complexityCount, 3) * 20        // 0/20/40/60%：组合复杂度（1-3类）
+  if (r.isNotWeak) score += 20                       // 20%：不在弱密码列表
+  return Math.min(score, 100)
+})
+`
+
+强度标签：
+-  20%：「不符合」（红色）
+- 21-40%：「弱」（橙色）
+- 41-60%：「一般」（黄色）
+- 61-80%：「强」（绿色）
+- 81-100%：「非常强」（深绿）
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| [ChangePasswordDTO.java](file:///D:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/ChangePasswordDTO.java) | @Pattern 改为 @Size(min=8, max=20)，去掉严格正则 |
+| [UserServiceImpl.java](file:///D:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java) | 新增 WEAK_PASSWORDS 弱密码黑名单常量、countPasswordComplexity() 方法；changePassword() 中增加黑名单检查和组合复杂度校验 |
+| [UserController.java](file:///D:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/controller/UserController.java) | 新增 10007（弱密码）、10008（复杂度不足）两个错误码映射 |
+| [ChangePassword.vue](file:///D:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/frontend/src/views/ChangePassword.vue) | 整体重构：新增弱密码黑名单、组合复杂度校验；规则说明 UI 改版（标题+特征检查+综合提示）；强度条算法重算；新增 10007/10008 错误提示处理 |
+
+---
+
+## 验证方法（测试矩阵）
+
+### 一、前端表单校验测试（即时反馈）
+
+| 测试项 | 输入 | 预期校验结果 | 错误提示 |
+|--------|------|------------|----------|
+| 空密码 | 留空 | ❌ 不通过 | 请输入新密码 |
+| 刚好 7 位 | Ab12345 | ❌ 不通过 | 密码长度至少8位 |
+| 刚好 8 位（两种组合） | Ab123456 | ✅ 通过 | - |
+| 刚好 20 位 | Aa123456789012345!@# | ✅ 通过 | - |
+| 21 位超长 |  重复 21 次 + 1 | ❌ 不通过 | 密码长度不能超过20位 |
+| 只有字母 | bcdefgh | ❌ 不通过 | 密码需包含字母、数字、特殊字符中的至少两种 |
+| 只有数字 | 12345678 | ❌ 不通过 | 密码过于常见（弱密码黑名单） |
+| 字母 + 数字（非弱密码） | hello2024 | ✅ 通过 | - |
+| 字母 + 特殊字符 | Hello!!! | ✅ 通过 | - |
+| 数字 + 特殊字符 | 1234!!!! | ✅ 通过 | - |
+| 弱密码黑名单 | password | ❌ 不通过 | 密码过于常见，请选择更复杂的密码 |
+| 弱密码黑名单（变体大小写） | Password123 | ❌ 不通过 | 密码过于常见，请选择更复杂的密码 |
+| 与旧密码相同 | 与旧密码输入一致 | ❌ 不通过 | 新密码不能与旧密码相同 |
+| 确认密码不一致 | 新密码 Abc12345，确认 Abc12346 | ❌ 不通过 | 两次输入的密码不一致 |
+
+### 二、后端业务校验测试（curl / Postman）
+
+`ash
+# 获取 token
+TOKEN=
+
+# 测试用例 1：两种组合（字母+数字），预期成功
+curl -X PUT http://localhost:8080/api/user/change-password \
+  -H "Authorization: Bearer " \
+  -H "Content-Type: application/json" \
+  -d '{"oldPassword":"123456","newPassword":"Hello2024","confirmPassword":"Hello2024"}'
+# 预期：code=200，message="密码修改成功，请重新登录"
+
+# 测试用例 2：弱密码（password），预期失败
+curl -X PUT http://localhost:8080/api/user/change-password \
+  -H "Authorization: Bearer " \
+  -H "Content-Type: application/json" \
+  -d '{"oldPassword":"123456","newPassword":"Password@123","confirmPassword":"Password@123"}'
+# 预期：code=10007，message="密码过于常见，请选择更复杂的密码"
+
+# 测试用例 3：只有字母（只有一种组合），预期失败
+curl -X PUT http://localhost:8080/api/user/change-password \
+  -H "Authorization: Bearer " \
+  -H "Content-Type: application/json" \
+  -d '{"oldPassword":"123456","newPassword":"abcdefgh","confirmPassword":"abcdefgh"}'
+# 预期：code=10008，message="密码复杂度不足，需包含字母、数字、特殊字符中的至少两种"
+`
+
+### 三、端到端流程测试
+
+`
+操作步骤：
+1. 登录系统（admin / 123456）
+2. 点击右上角头像  修改密码
+3. 观察规则说明区域是否显示「至少两种组合」的要求
+4. 输入旧密码：123456
+5. 输入新密码：Hello2024（字母+数字，两种组合）
+    观察强度条：显示「一般」或「强」，规则项中长度、字母、数字为绿色
+6. 确认密码：Hello2024
+7. 点击「确认修改」
+预期：
+   - 弹出成功对话框「密码修改成功，请使用新密码重新登录」
+   - 点击「重新登录」后跳转到登录页
+   - 使用旧密码无法登录（401 / 旧密码错误）
+   - 使用新密码 Hello2024 可正常登录
+`
+
+### 四、JWT 失效测试
+
+`
+前提：浏览器 A 已使用 admin 登录，获取旧 JWT
+步骤：
+1. 浏览器 B：登录 admin，修改密码为 Hello2024（成功后自动退出）
+2. 回到浏览器 A：刷新页面，或点击任意菜单
+预期：
+   - 浏览器 A 自动退出并跳转到登录页
+   - 显示提示「密码已修改，请重新登录」（来自 JwtAuthenticationFilter）
+`
+
+### 五、边界条件测试汇总
+
+| 边界场景 | 输入 | 预期 |
+|----------|------|------|
+| 最小长度 + 刚好两种组合 | 1aaaaaa（长度8，字母+数字） | ✅ 通过 |
+| 最小长度 + 只有一种组合 | aaaaaaa（长度8，只有字母） | ❌ 10008 复杂度不足 |
+| 弱密码黑名单大小写变体 | PASSWORD@123 | ❌ 10007 弱密码 |
+| 特殊字符包含所有支持的类型 | !@#$%^&*()_+ | ✅ 通过（字母+特殊字符） |
+| 新密码与旧密码相同 | 与旧密码完全一致 | ❌ 10005 新旧密码相同 |
+
+---
+
+## 问题预防建议
+
+### 1. 密码强度规则选型原则
+
+| 规则类型 | 适用场景 | 说明 |
+|----------|----------|------|
+| **长度  8 + 至少两种组合** | 普通业务系统（默认） | 业界最常用标准，用户体验与安全的平衡点 |
+| **长度  12 + 至少两种组合** | 金融/医疗等高安全系统 | 更长的长度比复杂组合更能提升熵值 |
+| **必须四种组合全部满足** | 极少见（军事、政府） | 用户体验极差，实际熵值提升有限，不推荐 |
+
+**安全原理**：密码强度 = 长度  字符空间大小。增加长度能**指数级**提升暴力破解成本，而增加字符种类只是**线性**提升。因此「长 + 两种组合」通常比「短 + 四种组合」更安全。
+
+### 2. 弱密码黑名单维护建议
+
+- **定期更新**：每月/每季度从 haveibeenpwned.com 等公开泄露库中同步 Top N 弱密码
+- **本地化补充**：根据业务特点加入域名、产品名、公司名等作为弱密码
+- **分级策略**：后台管理员账号可使用更长的黑名单和更高的复杂度要求
+- **运行时可配置**：生产环境建议将黑名单存储在 Redis 或配置中心，支持热更新无需重启
+
+### 3. 前后端校验一致性原则
+
+- **规则来源唯一**：密码组合规则、弱密码列表应在设计文档中统一，前后端按同一份实现
+- **双重保障**：前端校验负责体验（即时反馈），后端校验负责安全（不可绕过）
+- **错误码对齐**：前后端错误码一一映射，前端 catch 中按 code 分支处理，不依赖后端 message 文本
+
+### 4. 用户界面密码提示设计最佳实践
+
+- ✅ **用列表展示每个检查项**，已满足变绿色，未满足为灰色
+- ✅ **实时计算强度条**，颜色从红黄绿渐变
+- ✅ **明确说明"至少 N 种组合"**，不要让用户猜
+- ❌ **不要**用技术术语（如"正则不匹配"）作为错误提示
+- ❌ **不要**只显示一个笼统的"密码不符合要求"

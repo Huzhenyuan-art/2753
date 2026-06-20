@@ -22,7 +22,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -102,9 +105,44 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (passwordEncoder.matches(dto.getNewPassword(), user.getPassword())) {
             throw new RuntimeException("SAME_AS_OLD_PASSWORD");
         }
+        if (WEAK_PASSWORDS.contains(dto.getNewPassword().toLowerCase())) {
+            throw new RuntimeException("WEAK_PASSWORD");
+        }
+        if (countPasswordComplexity(dto.getNewPassword()) < 2) {
+            throw new RuntimeException("INSUFFICIENT_COMPLEXITY");
+        }
         user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
         user.setPasswordChangedAt(LocalDateTime.now());
         this.updateById(user);
+    }
+
+    private static final Set<String> WEAK_PASSWORDS = new HashSet<>(Arrays.asList(
+            "password", "password1", "password123", "password@123",
+            "123456", "12345678", "123456789", "1234567890",
+            "123123", "123321", "111111", "000000",
+            "654321", "88888888", "666666",
+            "admin", "admin123", "admin@123",
+            "qwerty", "qwerty123", "qwertyuiop",
+            "letmein", "welcome", "iloveyou",
+            "abc123", "abc@123",
+            "user@123", "test@123",
+            "pass@123", "pass@word1",
+            "1q2w3e4r", "1qaz2wsx",
+            "p@ssw0rd", "p@ssword"
+    ));
+
+    private int countPasswordComplexity(String password) {
+        int count = 0;
+        if (password.matches(".*[A-Za-z].*")) {
+            count++;
+        }
+        if (password.matches(".*\\d.*")) {
+            count++;
+        }
+        if (password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?].*")) {
+            count++;
+        }
+        return count;
     }
 
     @Override
