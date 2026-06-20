@@ -1796,3 +1796,193 @@ jobs:
 | **最小改动原则** | 能删字段就不补 import，优先精简代码 |
 
 通过以上预防措施，可以在编码阶段和 CI 阶段双层拦截此类问题，避免影响 Docker 构建和部署流程。
+
+---
+
+# 编辑弹窗密码强度不显示修复指南
+
+## 问题描述
+
+在用户编辑弹窗中修改密码时，密码强度实时提示没有显示，但新增用户时可以正常显示。用户在编辑用户信息并尝试修改密码时，无法看到密码强度的实时反馈。
+
+---
+
+## 根因分析
+
+### 根本原因：显示条件误将编辑场景排除
+
+在 [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) 的密码强度指示器中，`v-if` 条件设置错误：
+
+```vue
+<!-- 错误：只在新增场景显示密码强度 -->
+<div v-if="!userForm.id && userForm.password" class="password-strength">
+```
+
+`!userForm.id` 这个条件意味着：
+- **新增场景**：`userForm.id` 为 `undefined`，条件为 `true` → 正常显示 ✅
+- **编辑场景**：`userForm.id` 有值，条件为 `false` → 不显示 ❌
+
+### 为什么会出现这个错误？
+
+在最初实现时，确认密码字段确实只应该在新增场景显示（`v-if="!userForm.id"`），但错误地将相同的条件也应用到了密码强度指示器上。
+
+实际上：
+- **确认密码字段**：只应在新增场景显示 ✅
+- **密码强度指示器**：新增和编辑场景都应该显示（只要用户输入了密码）✅
+
+---
+
+## 修复方案
+
+### 修正密码强度指示器的显示条件
+
+修改 [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue#L199) 中密码强度指示器的 `v-if` 条件：
+
+```vue
+<!-- 修复前：仅新增场景显示 -->
+<div v-if="!userForm.id && userForm.password" class="password-strength">
+
+<!-- 修复后：只要有密码输入就显示（新增和编辑场景都适用） -->
+<div v-if="userForm.password" class="password-strength">
+```
+
+### 两个相关字段的显示条件对比
+
+| 字段 | 显示条件 | 说明 |
+|------|---------|------|
+| **确认密码** | `v-if="!userForm.id"` | 仅新增场景需要 |
+| **密码强度指示器** | `v-if="userForm.password"` | 只要输入密码就显示，与场景无关 |
+
+### 修复后的完整代码片段
+
+```vue
+<el-form-item label="登录密码" prop="password" :rules="userForm.id ? [] : userRules.password">
+  <el-input v-model="userForm.password" type="password" show-password placeholder="长度需在 6-20 位之间" />
+  <!-- 密码强度：只要输入密码就显示 -->
+  <div v-if="userForm.password" class="password-strength">
+    <div class="strength-bar">
+      <div 
+        class="strength-fill" 
+        :class="passwordStrength.level"
+        :style="{ width: passwordStrength.percent + '%' }"
+      ></div>
+    </div>
+    <span class="strength-text" :class="passwordStrength.level">
+      {{ passwordStrength.text }}
+    </span>
+  </div>
+</el-form-item>
+
+<!-- 确认密码：仅新增场景显示 -->
+<el-form-item v-if="!userForm.id" label="确认密码" prop="confirmPassword">
+  <el-input v-model="userForm.confirmPassword" type="password" show-password placeholder="请再次输入密码" />
+</el-form-item>
+```
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) | 密码强度指示器的 `v-if` 条件从 `!userForm.id && userForm.password` 改为 `userForm.password` |
+
+---
+
+## 验证方法
+
+### 一、新增用户场景验证
+
+```
+操作步骤：
+1. 点击"新增用户"按钮
+2. 在"登录密码"字段输入密码
+预期结果：
+- 输入密码后立即显示密码强度指示器
+- 密码强度随输入内容实时变化（弱/中/强/非常强）
+- 确认密码字段正常显示
+```
+
+### 二、编辑用户场景验证
+
+```
+操作步骤：
+1. 点击任意用户的"编辑"按钮
+2. 在"登录密码"字段输入新密码
+预期结果：
+- 输入密码后立即显示密码强度指示器（修复前不显示）
+- 密码强度随输入内容实时变化（弱/中/强/非常强）
+- 确认密码字段不显示（编辑场景不需要）
+```
+
+### 三、边界场景验证
+
+| 测试场景 | 操作步骤 | 预期结果 |
+|----------|---------|---------|
+| 编辑时不修改密码 | 打开编辑弹窗，不输入密码 | 密码强度指示器不显示（正确） |
+| 编辑时输入后清空 | 打开编辑弹窗，输入密码后再清空 | 密码强度指示器随密码内容显示/隐藏 |
+| 新增时输入后清空 | 打开新增弹窗，输入密码后再清空 | 密码强度指示器随密码内容显示/隐藏 |
+| 分配角色弹窗 | 点击"角色"按钮打开弹窗 | 不显示密码相关字段（正确） |
+
+---
+
+## 问题预防建议
+
+### 1. 相似 UI 元素的条件要分别设计
+
+当多个 UI 元素使用类似的显示条件时（如同一个弹窗中的多个字段），要逐一分析每个元素的业务逻辑，不要简单复制粘贴条件。
+
+```
+✅ 推荐做法：
+1. 为每个字段单独分析显示条件
+2. 写出条件后添加注释说明原因
+3. 代码审查时重点检查条件逻辑
+
+❌ 避免做法：
+- 复制粘贴相邻字段的条件而不思考
+- 多个字段共用同一个复杂条件
+```
+
+### 2. 表单字段条件检查清单
+
+在实现表单字段的显示/隐藏条件时，按以下清单验证：
+
+| # | 检查项 | 验证方法 |
+|---|--------|---------|
+| 1 | 新增场景是否正确显示 | 打开新增弹窗验证 |
+| 2 | 编辑场景是否正确显示 | 打开编辑弹窗验证 |
+| 3 | 空值场景是否正确隐藏 | 清空输入后验证 |
+| 4 | 有值场景是否正确显示 | 输入内容后验证 |
+| 5 | 其他弹窗场景是否正确 | 如分配角色等场景验证 |
+
+### 3. 响应式条件的单元测试思路
+
+对于复杂的条件判断，建议用 computed 属性封装，并编写测试用例：
+
+```typescript
+// 封装成 computed，便于测试和维护
+const showPasswordStrength = computed(() => {
+  // 密码强度：只要有密码输入就显示，不管是新增还是编辑
+  return !!userForm.value.password
+})
+
+const showConfirmPassword = computed(() => {
+  // 确认密码：只有新增场景需要
+  return !userForm.value.id
+})
+```
+
+### 4. 代码审查重点关注条件逻辑
+
+在 PR/MR 审查时，对 `v-if`、`v-show`、`:disabled` 等条件表达式要重点关注，确认其业务合理性。
+
+---
+
+## 总结
+
+这是一个典型的**条件复制错误**问题。在实现相似功能时，容易不假思索地复制粘贴代码，导致业务逻辑不符合需求。
+
+**核心教训**：
+- 相似字段的显示条件要独立分析，不要想当然
+- 编辑场景和新增场景的字段需求可能不同，要逐一验证
+- 简单的条件改动也可能影响用户体验，测试时要覆盖所有场景

@@ -196,7 +196,7 @@
         </el-form-item>
         <el-form-item label="登录密码" prop="password" :rules="userForm.id ? [] : userRules.password">
           <el-input v-model="userForm.password" type="password" show-password placeholder="长度需在 6-20 位之间" />
-          <div v-if="!userForm.id && userForm.password" class="password-strength">
+          <div v-if="userForm.password" class="password-strength">
             <div class="strength-bar">
               <div 
                 class="strength-fill" 
