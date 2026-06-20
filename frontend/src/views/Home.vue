@@ -200,6 +200,7 @@
             :disabled="!!userForm.id" 
             placeholder="登录使用的唯一账号"
             @blur="onUsernameBlur"
+            autocomplete="off"
           >
             <template #suffix>
               <span v-if="usernameCheckStatus === 'checking'" class="username-check-indicator">
@@ -325,6 +326,8 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
 const submitLoading = ref(false)
+type DialogMode = 'add' | 'edit' | 'assign' | null
+const dialogMode = ref<DialogMode>(null)
 const userFormRef = ref()
 const userForm = ref<any>({
   id: undefined,
@@ -540,6 +543,7 @@ const fetchData = async () => {
 }
 
 const handleAdd = () => {
+  dialogMode.value = 'add'
   dialogTitle.value = '新增用户档案'
   userForm.value = { id: undefined, username: '', password: '', confirmPassword: '', nickname: '', email: '', avatar: '', status: 1, roleIds: [] }
   avatarPreview.value = ''
@@ -548,6 +552,10 @@ const handleAdd = () => {
   if (usernameDebounceTimer) {
     clearTimeout(usernameDebounceTimer)
     usernameDebounceTimer = null
+  }
+  if (usernameCheckAbortController) {
+    usernameCheckAbortController.abort()
+    usernameCheckAbortController = null
   }
   dialogVisible.value = true
 }
@@ -582,10 +590,14 @@ const handleEdit = async (row: any) => {
     ElMessage.warning('您没有编辑用户的权限')
     return
   }
+  dialogMode.value = 'edit'
   dialogTitle.value = '编辑用户档案'
   let roleIds: number[] = []
   if (canEditRole.value) {
     roleIds = await loadUserRoles(row.id)
+  }
+  if (dialogMode.value !== 'edit') {
+    return
   }
   userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
   avatarPreview.value = ''
@@ -594,6 +606,10 @@ const handleEdit = async (row: any) => {
   if (usernameDebounceTimer) {
     clearTimeout(usernameDebounceTimer)
     usernameDebounceTimer = null
+  }
+  if (usernameCheckAbortController) {
+    usernameCheckAbortController.abort()
+    usernameCheckAbortController = null
   }
   dialogVisible.value = true
 }
@@ -606,7 +622,22 @@ watch(() => userForm.value.password, () => {
 
 watch(() => userForm.value.username, (newVal) => {
   if (userForm.value.id) return
+  if (dialogMode.value !== 'add') return
   debouncedCheckUsername(newVal?.trim(), userForm.value.id)
+})
+
+watch(() => dialogVisible.value, (val) => {
+  if (!val) {
+    dialogMode.value = null
+    if (usernameDebounceTimer) {
+      clearTimeout(usernameDebounceTimer)
+      usernameDebounceTimer = null
+    }
+    if (usernameCheckAbortController) {
+      usernameCheckAbortController.abort()
+      usernameCheckAbortController = null
+    }
+  }
 })
 
 const handleAssignRole = async (row: any) => {
@@ -614,8 +645,12 @@ const handleAssignRole = async (row: any) => {
     ElMessage.warning('您没有分配角色的权限')
     return
   }
+  dialogMode.value = 'assign'
   dialogTitle.value = `分配角色 - ${row.nickname || row.username}`
   const roleIds = await loadUserRoles(row.id)
+  if (dialogMode.value !== 'assign') {
+    return
+  }
   userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
   avatarPreview.value = ''
   avatarFile.value = null
@@ -623,6 +658,10 @@ const handleAssignRole = async (row: any) => {
   if (usernameDebounceTimer) {
     clearTimeout(usernameDebounceTimer)
     usernameDebounceTimer = null
+  }
+  if (usernameCheckAbortController) {
+    usernameCheckAbortController.abort()
+    usernameCheckAbortController = null
   }
   dialogVisible.value = true
 }

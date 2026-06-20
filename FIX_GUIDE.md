@@ -2923,3 +2923,559 @@ auditLog.setStatus(res.getCode() != null && res.getCode() == ResultCode.SUCCESS 
 | 5 | 登录失败（用户名不存在） | username=输入值，status=0，error_msg=错误信息 |
 | 6 | 登录失败（密码错误） | username=输入值，status=0，error_msg=错误信息 |
 | 7 | 请求参数中含敏感字段（password 等） | 未被记录到 params 或其他字段 |
+
+---
+
+# 新增用户时用户名自动填充当前登录用户修复指南
+
+## 问题描述
+
+在新增用户表单中，打开新增用户对话框时，用户名输入框自动填充了当前登录用户的用户名，并触发了重名校验，显示"用户名已被占用"。用户需要手动清空用户名才能继续操作，影响用户体验。
+
+---
+
+## 根因分析
+
+### 核心原因：异步竞态条件（Race Condition）
+
+handleEdit 和 handleAssignRole 函数中存在异步操作 wait loadUserRoles(row.id)，如果用户操作速度足够快，就会触发竞态条件：
+
+`
+时序重现（用户先点击"编辑"当前登录用户，再快速点击"新增用户"）：
+
+1. 点击"编辑"当前登录用户（username = "admin"）
+   
+2. handleEdit 开始执行
+    dialogMode.value = 'edit'
+    dialogTitle.value = '编辑用户档案'
+    await loadUserRoles(row.id)   异步请求，暂停执行
+   
+3. 在 loadUserRoles 请求完成前，快速点击"新增用户"
+   
+4. handleAdd 开始执行
+    dialogMode.value = 'add'
+    dialogTitle.value = '新增用户档案'
+    userForm.value = { id: undefined, username: '', ... }   重置为空
+    dialogVisible.value = true   对话框显示，用户看到空用户名
+   
+5. loadUserRoles 请求完成，handleEdit 继续执行
+    userForm.value = { ...row, ... }   ❌ 将 userForm 设置为"admin"的数据！
+   
+6. 结果：新增用户对话框中显示 username = "admin"，并触发重名校验
+`
+
+### 问题链条
+
+| 问题点 | 位置 | 影响 |
+|--------|------|------|
+| handleEdit 异步操作后未校验模式 | Home.vue | 异步完成后可能覆盖其他模式的表单数据 |
+| handleAssignRole 异步操作后未校验模式 | Home.vue | 同上 |
+| watch 用户名变化未校验 dialogMode | Home.vue | 编辑/分配角色模式下也会触发用户名检查 |
+| 缺少对话框关闭清理逻辑 | Home.vue | 弹窗关闭后定时器和请求可能仍在运行 |
+| 缺少 utocomplete="off" | 用户名输入框 | 浏览器可能自动填充保存的登录凭据 |
+
+---
+
+## 修复方案
+
+采用 **五层防护** 组合方案，彻底解决竞态条件和误触发问题：
+
+### 步骤一：新增 dialogMode 变量跟踪当前模式
+
+在 [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) 中添加模式跟踪变量：
+
+`	ypescript
+type DialogMode = 'add' | 'edit' | 'assign' | null
+const dialogMode = ref<DialogMode>(null)
+`
+
+### 步骤二：异步操作后校验模式（核心修复）
+
+在 handleEdit 和 handleAssignRole 的 wait loadUserRoles() 后添加模式校验：
+
+`	ypescript
+// handleEdit 修复后
+const handleEdit = async (row: any) => {
+  if (!canEdit.value) {
+    ElMessage.warning('您没有编辑用户的权限')
+    return
+  }
+  dialogMode.value = 'edit'  //  设置模式
+  dialogTitle.value = '编辑用户档案'
+  let roleIds: number[] = []
+  if (canEditRole.value) {
+    roleIds = await loadUserRoles(row.id)
+  }
+  if (dialogMode.value !== 'edit') {  //  模式校验：如果用户已切换模式，则放弃更新
+    return
+  }
+  userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
+  // ... 其余逻辑
+}
+`
+
+handleAssignRole 同理添加 dialogMode.value = 'assign' 和 if (dialogMode.value !== 'assign') return。
+
+### 步骤三：watch 中增加 dialogMode 校验
+
+修改用户名变化的 watch，仅在新增模式下触发校验：
+
+`	ypescript
+// 修复前
+watch(() => userForm.value.username, (newVal) => {
+  if (userForm.value.id) return
+  debouncedCheckUsername(newVal?.trim(), userForm.value.id)
+})
+
+// 修复后
+watch(() => userForm.value.username, (newVal) => {
+  if (userForm.value.id) return
+  if (dialogMode.value !== 'add') return  //  新增：仅新增模式下触发用户名检查
+  debouncedCheckUsername(newVal?.trim(), userForm.value.id)
+})
+`
+
+### 步骤四：新增对话框关闭清理逻辑
+
+添加 watch 监听 dialogVisible，关闭时清理所有异步资源并重置模式：
+
+`	ypescript
+watch(() => dialogVisible.value, (val) => {
+  if (!val) {
+    dialogMode.value = null  //  重置模式
+    if (usernameDebounceTimer) {
+      clearTimeout(usernameDebounceTimer)
+      usernameDebounceTimer = null
+    }
+    if (usernameCheckAbortController) {
+      usernameCheckAbortController.abort()
+      usernameCheckAbortController = null
+    }
+  }
+})
+`
+
+### 步骤五：添加 utocomplete="off" 防止浏览器自动填充
+
+给用户名输入框添加 autocomplete 属性：
+
+`html
+<el-input 
+  v-model="userForm.username" 
+  :disabled="!!userForm.id" 
+  placeholder="登录使用的唯一账号"
+  @blur="onUsernameBlur"
+  autocomplete="off"  <!-- 新增 -->
+>
+`
+
+### 步骤六：handleAdd 中增强清理逻辑
+
+在 handleAdd 中增加 usernameCheckAbortController 的清理，避免之前的请求影响：
+
+`	ypescript
+const handleAdd = () => {
+  dialogMode.value = 'add'
+  dialogTitle.value = '新增用户档案'
+  userForm.value = { id: undefined, username: '', ... }
+  // ...
+  if (usernameCheckAbortController) {  //  新增：取消之前的校验请求
+    usernameCheckAbortController.abort()
+    usernameCheckAbortController = null
+  }
+  dialogVisible.value = true
+}
+`
+
+handleEdit 和 handleAssignRole 中也增加相同的清理逻辑。
+
+---
+
+## 修复后的防护层级
+
+`
+第1层: dialogMode 模式标记（打开弹窗时设置）
+  
+第2层: 异步完成后模式校验（防止竞态覆盖）
+  
+第3层: watch 中模式校验（仅新增模式触发用户名检查）
+  
+第4层: 对话框关闭时清理（定时器、请求）
+  
+第5层: autocomplete="off"（防止浏览器自动填充）
+`
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| [Home.vue](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/frontend/src/views/Home.vue) | 新增 dialogMode 变量；handleEdit/handleAssignRole/handleAdd 添加模式校验和清理逻辑；用户名 watch 添加模式校验；新增 dialogVisible watch 清理资源；用户名输入框添加 utocomplete="off" |
+
+---
+
+## 验证方法
+
+### 一、竞态条件场景验证（核心）
+
+`
+操作步骤（必须快速连续点击）：
+1. 点击当前登录用户（如 admin）的"编辑"按钮
+2. 立即点击"新增用户"按钮（在编辑弹窗加载完成前）
+
+预期结果：
+- 新增用户弹窗打开
+- 用户名输入框为空（修复前显示 admin）
+- 不触发重名校验（修复前会显示"用户名已被占用"）
+`
+
+### 二、正常场景验证
+
+| 场景 | 操作步骤 | 预期结果 |
+|------|---------|---------|
+| 新增用户 | 点击"新增用户"，输入新用户名 | 用户名输入框为空，输入后触发防抖校验 |
+| 编辑用户 | 点击任意用户的"编辑"按钮 | 表单正确填充该用户数据，用户名禁用 |
+| 分配角色 | 点击任意用户的"角色"按钮 | 表单正确填充该用户数据 |
+| 关闭弹窗 | 按 ESC 或点击"取消" | 定时器和请求被清理，下次打开无残留状态 |
+| 浏览器自动填充 | 打开新增用户弹窗 | 浏览器不自动填充保存的用户名 |
+
+### 三、边界场景验证
+
+| 测试场景 | 操作步骤 | 预期结果 |
+|----------|---------|---------|
+| 快速多次点击"新增用户" | 连续快速点击 5 次"新增用户" | 每次打开用户名都是空的，无校验残留 |
+| 编辑  新增  编辑 | 先点编辑，再快速点新增，再点另一用户的编辑 | 每次表单数据正确，不混淆 |
+| 输入中关闭弹窗 | 新增用户时输入用户名，校验进行中按 ESC | 校验请求被取消，下次打开无残留状态 |
+| 防抖中关闭弹窗 | 输入用户名后 500ms 内关闭弹窗 | 防抖定时器被清除，不发起请求 |
+
+---
+
+## 问题预防建议
+
+### 1. 异步函数竞态条件检查清单
+
+任何包含 wait 的函数，如果后续会修改共享状态（如 userForm），都必须：
+
+`
+✅ 在 await 前设置唯一标识（如 dialogMode）
+✅ 在 await 后校验标识，如果已变化则放弃后续操作
+✅ 考虑用户可能在 await 期间切换到其他功能
+`
+
+反模式示例（危险）：
+`	ypescript
+const handleEdit = async (row) => {
+  const data = await loadData(row.id)  // 异步
+  userForm.value = data  // ❌ 用户可能已切换到其他功能，这里会覆盖！
+}
+`
+
+正确模式：
+`	ypescript
+const handleEdit = async (row) => {
+  dialogMode.value = 'edit'  // 设置标识
+  const data = await loadData(row.id)
+  if (dialogMode.value !== 'edit') return  // 校验标识
+  userForm.value = data  // ✅ 安全更新
+}
+`
+
+### 2. 多弹窗共享表单的最佳实践
+
+当多个功能（新增、编辑、分配角色）共享同一个 userForm 和 dialogVisible 时：
+
+| 措施 | 说明 |
+|------|------|
+| **模式变量** | 使用 dialogMode 跟踪当前是哪个功能 |
+| **入口设置模式** | 每个打开弹窗的函数第一行就设置模式 |
+| **异步后校验** | 每个 wait 后都要校验模式是否变化 |
+| **watch 中校验** | 监听表单字段变化的 watch 要校验当前模式 |
+| **关闭清理** | 弹窗关闭时重置模式、清理所有异步资源 |
+
+### 3. 浏览器自动填充预防
+
+对于用户名字段，在以下场景应该添加 utocomplete="off"：
+
+- 新增用户表单（管理员新增其他用户，不是自己登录）
+- 编辑用户表单（修改的是其他用户的信息）
+- 任何非登录场景的用户名输入框
+
+### 4. 响应式资源清理
+
+使用了 setTimeout、AbortController 等异步资源时，必须：
+
+1. 在组件卸载时清理（onUnmounted）
+2. 在功能结束时清理（如弹窗关闭）
+3. 在重新开始前清理（如再次发起请求前取消前一次）
+
+---
+
+## 总结：竞态条件防护方法论
+
+| 层次 | 手段 | 解决的问题 |
+|------|------|------------|
+| 标识层 | dialogMode 模式变量 | 区分当前正在执行的功能 |
+| 校验层 | 异步操作后校验模式 | 防止竞态覆盖共享状态 |
+| 过滤层 | watch 中校验模式 | 避免非目标场景触发副作用 |
+| 清理层 | 关闭时清理异步资源 | 防止残留状态影响后续操作 |
+| 环境层 | utocomplete="off" | 防止浏览器自动填充干扰 |
+
+**核心教训**：当多个功能共享同一个响应式状态（如 userForm）时，**必须**通过模式变量进行隔离，尤其要注意异步操作完成后的模式校验。看似偶发的"自动填充"问题，本质上是并发控制缺失导致的竞态条件。
+
+---
+
+# 鏂板鐢ㄦ埛鏃剁敤鎴峰悕鑷姩濉厖褰撳墠鐧诲綍鐢ㄦ埛淇鎸囧崡
+
+## 闂鎻忚堪
+
+鍦ㄦ柊澧炵敤鎴疯〃鍗曚腑锛屾墦寮€鏂板鐢ㄦ埛瀵硅瘽妗嗘椂锛岀敤鎴峰悕杈撳叆妗嗚嚜鍔ㄥ～鍏呬簡褰撳墠鐧诲綍鐢ㄦ埛鐨勭敤鎴峰悕锛屽苟瑙﹀彂浜嗛噸鍚嶆牎楠岋紝鏄剧ず"鐢ㄦ埛鍚嶅凡琚崰鐢?銆傜敤鎴烽渶瑕佹墜鍔ㄦ竻绌虹敤鎴峰悕鎵嶈兘缁х画鎿嶄綔锛屽奖鍝嶇敤鎴蜂綋楠屻€?
+---
+
+## 鏍瑰洜鍒嗘瀽
+
+### 鏍稿績鍘熷洜锛氬紓姝ョ珵鎬佹潯浠讹紙Race Condition锛?
+`handleEdit` 鍜?`handleAssignRole` 鍑芥暟涓瓨鍦ㄥ紓姝ユ搷浣?`await loadUserRoles(row.id)`锛屽鏋滅敤鎴锋搷浣滈€熷害瓒冲蹇紝灏变細瑙﹀彂绔炴€佹潯浠讹細
+
+```
+鏃跺簭閲嶇幇锛堢敤鎴峰厛鐐瑰嚮"缂栬緫"褰撳墠鐧诲綍鐢ㄦ埛锛屽啀蹇€熺偣鍑?鏂板鐢ㄦ埛"锛夛細
+
+1. 鐐瑰嚮"缂栬緫"褰撳墠鐧诲綍鐢ㄦ埛锛坲sername = "admin"锛?   鈫?2. handleEdit 寮€濮嬫墽琛?   鈹溾攢 dialogMode.value = 'edit'
+   鈹溾攢 dialogTitle.value = '缂栬緫鐢ㄦ埛妗ｆ'
+   鈹斺攢 await loadUserRoles(row.id)  鈫?寮傛璇锋眰锛屾殏鍋滄墽琛?   
+3. 鍦?loadUserRoles 璇锋眰瀹屾垚鍓嶏紝蹇€熺偣鍑?鏂板鐢ㄦ埛"
+   鈫?4. handleAdd 寮€濮嬫墽琛?   鈹溾攢 dialogMode.value = 'add'
+   鈹溾攢 dialogTitle.value = '鏂板鐢ㄦ埛妗ｆ'
+   鈹溾攢 userForm.value = { id: undefined, username: '', ... }  鈫?閲嶇疆涓虹┖
+   鈹斺攢 dialogVisible.value = true  鈫?瀵硅瘽妗嗘樉绀猴紝鐢ㄦ埛鐪嬪埌绌虹敤鎴峰悕
+   
+5. loadUserRoles 璇锋眰瀹屾垚锛宧andleEdit 缁х画鎵ц
+   鈹斺攢 userForm.value = { ...row, ... }  鈫?鉂?灏?userForm 璁剧疆涓?admin"鐨勬暟鎹紒
+   
+6. 缁撴灉锛氭柊澧炵敤鎴峰璇濇涓樉绀?username = "admin"锛屽苟瑙﹀彂閲嶅悕鏍￠獙
+```
+
+### 闂閾炬潯
+
+| 闂鐐?| 浣嶇疆 | 褰卞搷 |
+|--------|------|------|
+| `handleEdit` 寮傛鎿嶄綔鍚庢湭鏍￠獙妯″紡 | `Home.vue` | 寮傛瀹屾垚鍚庡彲鑳借鐩栧叾浠栨ā寮忕殑琛ㄥ崟鏁版嵁 |
+| `handleAssignRole` 寮傛鎿嶄綔鍚庢湭鏍￠獙妯″紡 | `Home.vue` | 鍚屼笂 |
+| `watch` 鐢ㄦ埛鍚嶅彉鍖栨湭鏍￠獙 dialogMode | `Home.vue` | 缂栬緫/鍒嗛厤瑙掕壊妯″紡涓嬩篃浼氳Е鍙戠敤鎴峰悕妫€鏌?|
+| 缂哄皯瀵硅瘽妗嗗叧闂竻鐞嗛€昏緫 | `Home.vue` | 寮圭獥鍏抽棴鍚庡畾鏃跺櫒鍜岃姹傚彲鑳戒粛鍦ㄨ繍琛?|
+| 缂哄皯 `autocomplete="off"` | 鐢ㄦ埛鍚嶈緭鍏ユ | 娴忚鍣ㄥ彲鑳借嚜鍔ㄥ～鍏呬繚瀛樼殑鐧诲綍鍑嵁 |
+
+---
+
+## 淇鏂规
+
+閲囩敤 **浜斿眰闃叉姢** 缁勫悎鏂规锛屽交搴曡В鍐崇珵鎬佹潯浠跺拰璇Е鍙戦棶棰橈細
+
+### 姝ラ涓€锛氭柊澧?dialogMode 鍙橀噺璺熻釜褰撳墠妯″紡
+
+鍦?[Home.vue](file:///d:/Desktop/鏂板缓鏂囦欢澶?20(2)/label-2753/2753/frontend/src/views/Home.vue) 涓坊鍔犳ā寮忚窡韪彉閲忥細
+
+```typescript
+type DialogMode = 'add' | 'edit' | 'assign' | null
+const dialogMode = ref<DialogMode>(null)
+```
+
+### 姝ラ浜岋細寮傛鎿嶄綔鍚庢牎楠屾ā寮忥紙鏍稿績淇锛?
+鍦?`handleEdit` 鍜?`handleAssignRole` 鐨?`await loadUserRoles()` 鍚庢坊鍔犳ā寮忔牎楠岋細
+
+```typescript
+// handleEdit 淇鍚?const handleEdit = async (row: any) => {
+  if (!canEdit.value) {
+    ElMessage.warning('鎮ㄦ病鏈夌紪杈戠敤鎴风殑鏉冮檺')
+    return
+  }
+  dialogMode.value = 'edit'  // 鈫?璁剧疆妯″紡
+  dialogTitle.value = '缂栬緫鐢ㄦ埛妗ｆ'
+  let roleIds: number[] = []
+  if (canEditRole.value) {
+    roleIds = await loadUserRoles(row.id)
+  }
+  if (dialogMode.value !== 'edit') {  // 鈫?妯″紡鏍￠獙锛氬鏋滅敤鎴峰凡鍒囨崲妯″紡锛屽垯鏀惧純鏇存柊
+    return
+  }
+  userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
+  // ... 鍏朵綑閫昏緫
+}
+```
+
+`handleAssignRole` 鍚岀悊娣诲姞 `dialogMode.value = 'assign'` 鍜?`if (dialogMode.value !== 'assign') return`銆?
+### 姝ラ涓夛細watch 涓鍔?dialogMode 鏍￠獙
+
+淇敼鐢ㄦ埛鍚嶅彉鍖栫殑 watch锛屼粎鍦ㄦ柊澧炴ā寮忎笅瑙﹀彂鏍￠獙锛?
+```typescript
+// 淇鍓?watch(() => userForm.value.username, (newVal) => {
+  if (userForm.value.id) return
+  debouncedCheckUsername(newVal?.trim(), userForm.value.id)
+})
+
+// 淇鍚?watch(() => userForm.value.username, (newVal) => {
+  if (userForm.value.id) return
+  if (dialogMode.value !== 'add') return  // 鈫?鏂板锛氫粎鏂板妯″紡涓嬭Е鍙戠敤鎴峰悕妫€鏌?  debouncedCheckUsername(newVal?.trim(), userForm.value.id)
+})
+```
+
+### 姝ラ鍥涳細鏂板瀵硅瘽妗嗗叧闂竻鐞嗛€昏緫
+
+娣诲姞 watch 鐩戝惉 `dialogVisible`锛屽叧闂椂娓呯悊鎵€鏈夊紓姝ヨ祫婧愬苟閲嶇疆妯″紡锛?
+```typescript
+watch(() => dialogVisible.value, (val) => {
+  if (!val) {
+    dialogMode.value = null  // 鈫?閲嶇疆妯″紡
+    if (usernameDebounceTimer) {
+      clearTimeout(usernameDebounceTimer)
+      usernameDebounceTimer = null
+    }
+    if (usernameCheckAbortController) {
+      usernameCheckAbortController.abort()
+      usernameCheckAbortController = null
+    }
+  }
+})
+```
+
+### 姝ラ浜旓細娣诲姞 `autocomplete="off"` 闃叉娴忚鍣ㄨ嚜鍔ㄥ～鍏?
+缁欑敤鎴峰悕杈撳叆妗嗘坊鍔?autocomplete 灞炴€э細
+
+```html
+<el-input 
+  v-model="userForm.username" 
+  :disabled="!!userForm.id" 
+  placeholder="鐧诲綍浣跨敤鐨勫敮涓€璐﹀彿"
+  @blur="onUsernameBlur"
+  autocomplete="off"  <!-- 鏂板 -->
+>
+```
+
+### 姝ラ鍏細handleAdd 涓寮烘竻鐞嗛€昏緫
+
+鍦?`handleAdd` 涓鍔?`usernameCheckAbortController` 鐨勬竻鐞嗭紝閬垮厤涔嬪墠鐨勮姹傚奖鍝嶏細
+
+```typescript
+const handleAdd = () => {
+  dialogMode.value = 'add'
+  dialogTitle.value = '鏂板鐢ㄦ埛妗ｆ'
+  userForm.value = { id: undefined, username: '', ... }
+  // ...
+  if (usernameCheckAbortController) {  // 鈫?鏂板锛氬彇娑堜箣鍓嶇殑鏍￠獙璇锋眰
+    usernameCheckAbortController.abort()
+    usernameCheckAbortController = null
+  }
+  dialogVisible.value = true
+}
+```
+
+`handleEdit` 鍜?`handleAssignRole` 涓篃澧炲姞鐩稿悓鐨勬竻鐞嗛€昏緫銆?
+---
+
+## 淇鍚庣殑闃叉姢灞傜骇
+
+```
+绗?灞? dialogMode 妯″紡鏍囪锛堟墦寮€寮圭獥鏃惰缃級
+  鈫?绗?灞? 寮傛瀹屾垚鍚庢ā寮忔牎楠岋紙闃叉绔炴€佽鐩栵級
+  鈫?绗?灞? watch 涓ā寮忔牎楠岋紙浠呮柊澧炴ā寮忚Е鍙戠敤鎴峰悕妫€鏌ワ級
+  鈫?绗?灞? 瀵硅瘽妗嗗叧闂椂娓呯悊锛堝畾鏃跺櫒銆佽姹傦級
+  鈫?绗?灞? autocomplete="off"锛堥槻姝㈡祻瑙堝櫒鑷姩濉厖锛?```
+
+---
+
+## 鏈淇娑夊強鏂囦欢
+
+| 鏂囦欢 | 淇敼鍐呭 |
+|------|----------|
+| [Home.vue](file:///d:/Desktop/鏂板缓鏂囦欢澶?20(2)/label-2753/2753/frontend/src/views/Home.vue) | 鏂板 `dialogMode` 鍙橀噺锛沗handleEdit`/`handleAssignRole`/`handleAdd` 娣诲姞妯″紡鏍￠獙鍜屾竻鐞嗛€昏緫锛涚敤鎴峰悕 watch 娣诲姞妯″紡鏍￠獙锛涙柊澧?`dialogVisible` watch 娓呯悊璧勬簮锛涚敤鎴峰悕杈撳叆妗嗘坊鍔?`autocomplete="off"` |
+
+---
+
+## 楠岃瘉鏂规硶
+
+### 涓€銆佺珵鎬佹潯浠跺満鏅獙璇侊紙鏍稿績锛?
+```
+鎿嶄綔姝ラ锛堝繀椤诲揩閫熻繛缁偣鍑伙級锛?1. 鐐瑰嚮褰撳墠鐧诲綍鐢ㄦ埛锛堝 admin锛夌殑"缂栬緫"鎸夐挳
+2. 绔嬪嵆鐐瑰嚮"鏂板鐢ㄦ埛"鎸夐挳锛堝湪缂栬緫寮圭獥鍔犺浇瀹屾垚鍓嶏級
+
+棰勬湡缁撴灉锛?- 鏂板鐢ㄦ埛寮圭獥鎵撳紑
+- 鐢ㄦ埛鍚嶈緭鍏ユ涓虹┖锛堜慨澶嶅墠鏄剧ず admin锛?- 涓嶈Е鍙戦噸鍚嶆牎楠岋紙淇鍓嶄細鏄剧ず"鐢ㄦ埛鍚嶅凡琚崰鐢?锛?```
+
+### 浜屻€佹甯稿満鏅獙璇?
+| 鍦烘櫙 | 鎿嶄綔姝ラ | 棰勬湡缁撴灉 |
+|------|---------|---------|
+| 鏂板鐢ㄦ埛 | 鐐瑰嚮"鏂板鐢ㄦ埛"锛岃緭鍏ユ柊鐢ㄦ埛鍚?| 鐢ㄦ埛鍚嶈緭鍏ユ涓虹┖锛岃緭鍏ュ悗瑙﹀彂闃叉姈鏍￠獙 |
+| 缂栬緫鐢ㄦ埛 | 鐐瑰嚮浠绘剰鐢ㄦ埛鐨?缂栬緫"鎸夐挳 | 琛ㄥ崟姝ｇ‘濉厖璇ョ敤鎴锋暟鎹紝鐢ㄦ埛鍚嶇鐢?|
+| 鍒嗛厤瑙掕壊 | 鐐瑰嚮浠绘剰鐢ㄦ埛鐨?瑙掕壊"鎸夐挳 | 琛ㄥ崟姝ｇ‘濉厖璇ョ敤鎴锋暟鎹?|
+| 鍏抽棴寮圭獥 | 鎸?ESC 鎴栫偣鍑?鍙栨秷" | 瀹氭椂鍣ㄥ拰璇锋眰琚竻鐞嗭紝涓嬫鎵撳紑鏃犳畫鐣欑姸鎬?|
+| 娴忚鍣ㄨ嚜鍔ㄥ～鍏?| 鎵撳紑鏂板鐢ㄦ埛寮圭獥 | 娴忚鍣ㄤ笉鑷姩濉厖淇濆瓨鐨勭敤鎴峰悕 |
+
+### 涓夈€佽竟鐣屽満鏅獙璇?
+| 娴嬭瘯鍦烘櫙 | 鎿嶄綔姝ラ | 棰勬湡缁撴灉 |
+|----------|---------|---------|
+| 蹇€熷娆＄偣鍑?鏂板鐢ㄦ埛" | 杩炵画蹇€熺偣鍑?5 娆?鏂板鐢ㄦ埛" | 姣忔鎵撳紑鐢ㄦ埛鍚嶉兘鏄┖鐨勶紝鏃犳牎楠屾畫鐣?|
+| 缂栬緫 鈫?鏂板 鈫?缂栬緫 | 鍏堢偣缂栬緫锛屽啀蹇€熺偣鏂板锛屽啀鐐瑰彟涓€鐢ㄦ埛鐨勭紪杈?| 姣忔琛ㄥ崟鏁版嵁姝ｇ‘锛屼笉娣锋穯 |
+| 杈撳叆涓叧闂脊绐?| 鏂板鐢ㄦ埛鏃惰緭鍏ョ敤鎴峰悕锛屾牎楠岃繘琛屼腑鎸?ESC | 鏍￠獙璇锋眰琚彇娑堬紝涓嬫鎵撳紑鏃犳畫鐣欑姸鎬?|
+| 闃叉姈涓叧闂脊绐?| 杈撳叆鐢ㄦ埛鍚嶅悗 500ms 鍐呭叧闂脊绐?| 闃叉姈瀹氭椂鍣ㄨ娓呴櫎锛屼笉鍙戣捣璇锋眰 |
+
+---
+
+## 闂棰勯槻寤鸿
+
+### 1. 寮傛鍑芥暟绔炴€佹潯浠舵鏌ユ竻鍗?
+浠讳綍鍖呭惈 `await` 鐨勫嚱鏁帮紝濡傛灉鍚庣画浼氫慨鏀瑰叡浜姸鎬侊紙濡?`userForm`锛夛紝閮藉繀椤伙細
+
+```
+鉁?鍦?await 鍓嶈缃敮涓€鏍囪瘑锛堝 dialogMode锛?鉁?鍦?await 鍚庢牎楠屾爣璇嗭紝濡傛灉宸插彉鍖栧垯鏀惧純鍚庣画鎿嶄綔
+鉁?鑰冭檻鐢ㄦ埛鍙兘鍦?await 鏈熼棿鍒囨崲鍒板叾浠栧姛鑳?```
+
+鍙嶆ā寮忕ず渚嬶紙鍗遍櫓锛夛細
+```typescript
+const handleEdit = async (row) => {
+  const data = await loadData(row.id)  // 寮傛
+  userForm.value = data  // 鉂?鐢ㄦ埛鍙兘宸插垏鎹㈠埌鍏朵粬鍔熻兘锛岃繖閲屼細瑕嗙洊锛?}
+```
+
+姝ｇ‘妯″紡锛?```typescript
+const handleEdit = async (row) => {
+  dialogMode.value = 'edit'  // 璁剧疆鏍囪瘑
+  const data = await loadData(row.id)
+  if (dialogMode.value !== 'edit') return  // 鏍￠獙鏍囪瘑
+  userForm.value = data  // 鉁?瀹夊叏鏇存柊
+}
+```
+
+### 2. 澶氬脊绐楀叡浜〃鍗曠殑鏈€浣冲疄璺?
+褰撳涓姛鑳斤紙鏂板銆佺紪杈戙€佸垎閰嶈鑹诧級鍏变韩鍚屼竴涓?`userForm` 鍜?`dialogVisible` 鏃讹細
+
+| 鎺柦 | 璇存槑 |
+|------|------|
+| **妯″紡鍙橀噺** | 浣跨敤 `dialogMode` 璺熻釜褰撳墠鏄摢涓姛鑳?|
+| **鍏ュ彛璁剧疆妯″紡** | 姣忎釜鎵撳紑寮圭獥鐨勫嚱鏁扮涓€琛屽氨璁剧疆妯″紡 |
+| **寮傛鍚庢牎楠?* | 姣忎釜 `await` 鍚庨兘瑕佹牎楠屾ā寮忔槸鍚﹀彉鍖?|
+| **watch 涓牎楠?* | 鐩戝惉琛ㄥ崟瀛楁鍙樺寲鐨?watch 瑕佹牎楠屽綋鍓嶆ā寮?|
+| **鍏抽棴娓呯悊** | 寮圭獥鍏抽棴鏃堕噸缃ā寮忋€佹竻鐞嗘墍鏈夊紓姝ヨ祫婧?|
+
+### 3. 娴忚鍣ㄨ嚜鍔ㄥ～鍏呴闃?
+瀵逛簬鐢ㄦ埛鍚嶅瓧娈碉紝鍦ㄤ互涓嬪満鏅簲璇ユ坊鍔?`autocomplete="off"`锛?
+- 鏂板鐢ㄦ埛琛ㄥ崟锛堢鐞嗗憳鏂板鍏朵粬鐢ㄦ埛锛屼笉鏄嚜宸辩櫥褰曪級
+- 缂栬緫鐢ㄦ埛琛ㄥ崟锛堜慨鏀圭殑鏄叾浠栫敤鎴风殑淇℃伅锛?- 浠讳綍闈炵櫥褰曞満鏅殑鐢ㄦ埛鍚嶈緭鍏ユ
+
+### 4. 鍝嶅簲寮忚祫婧愭竻鐞?
+浣跨敤浜?`setTimeout`銆乣AbortController` 绛夊紓姝ヨ祫婧愭椂锛屽繀椤伙細
+
+1. 鍦ㄧ粍浠跺嵏杞芥椂娓呯悊锛坄onUnmounted`锛?2. 鍦ㄥ姛鑳界粨鏉熸椂娓呯悊锛堝寮圭獥鍏抽棴锛?3. 鍦ㄩ噸鏂板紑濮嬪墠娓呯悊锛堝鍐嶆鍙戣捣璇锋眰鍓嶅彇娑堝墠涓€娆★級
+
+---
+
+## 鎬荤粨锛氱珵鎬佹潯浠堕槻鎶ゆ柟娉曡
+
+| 灞傛 | 鎵嬫 | 瑙ｅ喅鐨勯棶棰?|
+|------|------|------------|
+| 鏍囪瘑灞?| `dialogMode` 妯″紡鍙橀噺 | 鍖哄垎褰撳墠姝ｅ湪鎵ц鐨勫姛鑳?|
+| 鏍￠獙灞?| 寮傛鎿嶄綔鍚庢牎楠屾ā寮?| 闃叉绔炴€佽鐩栧叡浜姸鎬?|
+| 杩囨护灞?| watch 涓牎楠屾ā寮?| 閬垮厤闈炵洰鏍囧満鏅Е鍙戝壇浣滅敤 |
+| 娓呯悊灞?| 鍏抽棴鏃舵竻鐞嗗紓姝ヨ祫婧?| 闃叉娈嬬暀鐘舵€佸奖鍝嶅悗缁搷浣?|
+| 鐜灞?| `autocomplete="off"` | 闃叉娴忚鍣ㄨ嚜鍔ㄥ～鍏呭共鎵?|
+
+**鏍稿績鏁欒**锛氬綋澶氫釜鍔熻兘鍏变韩鍚屼竴涓搷搴斿紡鐘舵€侊紙濡?`userForm`锛夋椂锛?*蹇呴』**閫氳繃妯″紡鍙橀噺杩涜闅旂锛屽挨鍏惰娉ㄦ剰寮傛鎿嶄綔瀹屾垚鍚庣殑妯″紡鏍￠獙銆傜湅浼煎伓鍙戠殑"鑷姩濉厖"闂锛屾湰璐ㄤ笂鏄苟鍙戞帶鍒剁己澶卞鑷寸殑绔炴€佹潯浠躲€?
