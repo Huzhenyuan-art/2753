@@ -3479,3 +3479,271 @@ const handleEdit = async (row) => {
 | 鐜灞?| `autocomplete="off"` | 闃叉娴忚鍣ㄨ嚜鍔ㄥ～鍏呭共鎵?|
 
 **鏍稿績鏁欒**锛氬綋澶氫釜鍔熻兘鍏变韩鍚屼竴涓搷搴斿紡鐘舵€侊紙濡?`userForm`锛夋椂锛?*蹇呴』**閫氳繃妯″紡鍙橀噺杩涜闅旂锛屽挨鍏惰娉ㄦ剰寮傛鎿嶄綔瀹屾垚鍚庣殑妯″紡鏍￠獙銆傜湅浼煎伓鍙戠殑"鑷姩濉厖"闂锛屾湰璐ㄤ笂鏄苟鍙戞帶鍒剁己澶卞鑷寸殑绔炴€佹潯浠躲€?
+
+---
+
+# 鏂板鐢ㄦ埛琛ㄥ崟鐢ㄦ埛鍚嶈嚜鍔ㄥ～鍐欏叏闈慨澶嶆寚鍗楋紙绗簩杞級
+
+## 闂鎻忚堪
+
+鏂板鐢ㄦ埛琛ㄥ崟鎵撳紑鏃讹紝鐢ㄦ埛鍚嶈緭鍏ユ浠嶄細琚嚜鍔ㄥ～鍏呭唴瀹癸紙褰撳墠鐧诲綍鐢ㄦ埛鐨勭敤鎴峰悕锛夛紝骞惰Е鍙戦噸鍚嶆牎楠屻€備笂涓€杞慨澶嶄粎澶勭悊浜嗗紓姝ョ珵鎬佹潯浠讹紝闂浠嶆湭瀹屽叏瑙ｅ喅銆?
+---
+
+## 鍏ㄩ潰鎺掓煡缁撴灉
+
+缁忕郴缁熸€ф帓鏌ワ紝鍙戠幇**涓変釜鐙珛鏍瑰洜**鍏卞悓瀵艰嚧璇ラ棶棰橈紝涓婁竴杞粎淇浜嗗叾涓竴涓細
+
+### 鏍瑰洜1锛氭祻瑙堝櫒/瀵嗙爜绠＄悊鍣ㄨ嚜鍔ㄥ～鍏咃紙涓昏鍘熷洜锛?
+`el-input` 娓叉煋鍑虹殑鍘熺敓 `<input>` 鍏冪礌琚祻瑙堝櫒锛圕hrome銆丒dge 绛夛級鎴栧瘑鐮佺鐞嗗櫒锛圠astPass銆?Password 绛夛級璇嗗埆涓?鐢ㄦ埛鍚?瀛楁锛岃嚜鍔ㄥ～鍏呭凡淇濆瓨鐨勭櫥褰曞嚟鎹€?
+涓婁竴杞粎娣诲姞浜?`autocomplete="off"`锛屼絾鐜颁唬娴忚鍣ㄥ `autocomplete="off"` 鍩烘湰鏃犺锛?- Chrome 鏄庣‘鏂囨。璇存槑锛氬綋娴忚鍣ㄨ涓虹敤鎴峰悕/瀵嗙爜瀛楁搴旇鑷姩濉厖鏃讹紝`autocomplete="off"` 浼氳蹇界暐
+- LastPass銆?Password 绛夊瘑鐮佺鐞嗗櫒浼氫富鍔ㄨ瘑鍒〃鍗曠粨鏋勫苟濉厖
+
+### 鏍瑰洜2锛歚destroy-on-close` + DOM 閲嶅缓瑙﹀彂浜屾濉厖
+
+瀵硅瘽妗嗚缃簡 `destroy-on-close`锛屾瘡娆″叧闂悗琛ㄥ崟 DOM 琚攢姣併€傞噸鏂版墦寮€鏃讹紝娴忚鍣ㄧ湅鍒版柊鐨勭┖琛ㄥ崟锛屼細鍐嶆灏濊瘯鑷姩濉厖銆傝€?Vue 鐨勫搷搴斿紡绯荤粺鏃犳硶鎰熺煡娴忚鍣ㄧ洿鎺ヤ慨鏀?DOM 鐨勮涓猴紝瀵艰嚧 `v-model` 缁戝畾鐨勫€间笌瀹為檯 DOM 鏄剧ず涓嶄竴鑷淬€?
+### 鏍瑰洜3锛氬紓姝ュ洖璋冧腑缂哄皯妯″紡/鍙鎬ф牎楠?
+鎵€鏈夊紓姝ュ洖璋冿紙`debouncedCheckUsername`銆乣onUsernameBlur`銆乣validateUsername` 涓殑 `await`锛夊湪璇锋眰杩斿洖鍚庣洿鎺ユ洿鏂?`usernameCheckStatus`锛屾病鏈夋牎楠屽綋鍓嶆槸鍚︿粛澶勪簬鏂板妯″紡涓斿璇濇鍙锛屽鑷达細
+- 瀵硅瘽妗嗗叧闂悗锛屾棫鐨勬牎楠岀粨鏋滀粛鍙兘琚啓鍏?- 妯″紡鍒囨崲鍚庯紝鏃ц姹傜殑缁撴灉鍙兘瑕嗙洊鏂扮殑鐘舵€?
+---
+
+## 淇鏂规
+
+### 淇1锛氬叏闈㈢殑娴忚鍣?瀵嗙爜绠＄悊鍣ㄨ嚜鍔ㄥ～鍏呴槻鎶?
+淇敼 [Home.vue](file:///d:/Desktop/鏂板缓鏂囦欢澶?20(2)/label-2753/2753/frontend/src/views/Home.vue) 涓墍鏈夋晱鎰熻緭鍏ユ鐨勫睘鎬э細
+
+**鐢ㄦ埛鍚嶈緭鍏ユ**锛?```html
+<el-input 
+  v-model="userForm.username" 
+  :disabled="!!userForm.id" 
+  placeholder="鐧诲綍浣跨敤鐨勫敮涓€璐﹀彿"
+  @blur="onUsernameBlur"
+  name="new-username"
+  autocomplete="new-password"
+  data-lpignore="true"
+  data-1p-ignore="true"
+>
+```
+
+**瀵嗙爜杈撳叆妗?*锛?```html
+<el-input v-model="userForm.password" type="password" show-password 
+  placeholder="闀垮害闇€鍦?6-20 浣嶄箣闂? 
+  name="new-password" autocomplete="new-password" 
+  data-lpignore="true" data-1p-ignore="true" />
+```
+
+**纭瀵嗙爜杈撳叆妗?*锛?```html
+<el-input v-model="userForm.confirmPassword" type="password" show-password 
+  placeholder="璇峰啀娆¤緭鍏ュ瘑鐮? 
+  name="confirm-password" autocomplete="new-password" 
+  data-lpignore="true" data-1p-ignore="true" />
+```
+
+鍏抽敭灞炴€ц鏄庯細
+
+| 灞炴€?| 浣滅敤 | 璇存槑 |
+|------|------|------|
+| `name="new-username"` | 鑷畾涔?name 灞炴€?| 閬垮厤娴忚鍣ㄩ€氳繃 `name="username"` 璇嗗埆涓虹櫥褰曠敤鎴峰悕 |
+| `autocomplete="new-password"` | 鍛婄煡娴忚鍣ㄨ繖鏄柊瀵嗙爜 | Chrome 瀵规鍊肩殑澶勭悊鏄笉鑷姩濉厖锛堜笉鍚屼簬 `off`锛?|
+| `data-lpignore="true"` | LastPass 蹇界暐鏍囪 | LastPass 璇嗗埆姝ゅ睘鎬у悗涓嶄細鑷姩濉厖璇ュ瓧娈?|
+| `data-1p-ignore="true"` | 1Password 蹇界暐鏍囪 | 1Password 璇嗗埆姝ゅ睘鎬у悗涓嶄細鑷姩濉厖璇ュ瓧娈?|
+
+### 淇2锛歨andleAdd 涓?nextTick 浜屾娓呯┖
+
+鍦?`handleAdd` 涓紝浣跨敤 `nextTick` 鍦?DOM 瀹屽叏娓叉煋鍚庝簩娆℃牎楠屽苟娓呯┖锛岄槻姝㈡祻瑙堝櫒寮傛濉厖鍚?Vue 鍝嶅簲寮忕郴缁熸湭鎰熺煡锛?
+```typescript
+const handleAdd = () => {
+  dialogMode.value = 'add'
+  dialogTitle.value = '鏂板鐢ㄦ埛妗ｆ'
+  userForm.value = { id: undefined, username: '', password: '', confirmPassword: '', ... }
+  // ... 娓呯悊閫昏緫
+  dialogVisible.value = true
+  nextTick(() => {
+    if (dialogMode.value !== 'add') return
+    // 娴忚鍣ㄥ彲鑳藉湪 DOM 閲嶅缓鍚庡紓姝ュ～鍏呬簡鐢ㄦ埛鍚嶏紝浜屾娓呯┖
+    if (userForm.value.username && !userForm.value.id) {
+      userForm.value.username = ''
+      userForm.value.password = ''
+      userForm.value.confirmPassword = ''
+      usernameCheckStatus.value = 'idle'
+    }
+    userFormRef.value?.clearValidate()
+  })
+}
+```
+
+### 淇3锛氭墍鏈夊紓姝ュ洖璋冨鍔犳ā寮?鍙鎬ф牎楠?
+**debouncedCheckUsername**锛?```typescript
+usernameDebounceTimer = setTimeout(async () => {
+  try {
+    const available = await checkUsernameAvailable(username, excludeId)
+    if (dialogMode.value !== 'add' || !dialogVisible.value) return  // 鈫?鏂板
+    usernameCheckStatus.value = available ? 'available' : 'unavailable'
+  } catch (e: any) { ... }
+}, 500)
+```
+
+**onUsernameBlur**锛?```typescript
+const onUsernameBlur = () => {
+  if (userForm.value.id) return
+  if (dialogMode.value !== 'add') return      // 鈫?鏂板
+  if (!dialogVisible.value) return             // 鈫?鏂板
+  // ...
+  ;(async () => {
+    try {
+      const available = await checkUsernameAvailable(username)
+      if (dialogMode.value !== 'add' || !dialogVisible.value) return  // 鈫?鏂板
+      usernameCheckStatus.value = available ? 'available' : 'unavailable'
+    } catch (e: any) { ... }
+  })()
+}
+```
+
+**validateUsername**锛?```typescript
+const validateUsername = async (_rule, value, callback) => {
+  // ...
+  if (dialogMode.value !== 'add') {  // 鈫?鏂板
+    callback()
+    return
+  }
+  try {
+    if (usernameCheckStatus.value === 'checking') {
+      const available = await checkUsernameAvailable(trimmed)
+      if (dialogMode.value !== 'add' || !dialogVisible.value) {  // 鈫?鏂板
+        callback()
+        return
+      }
+      // ...
+    }
+  }
+}
+```
+
+### 淇4锛歸atch 涓鍔?dialogVisible 瀹堝崼
+
+```typescript
+watch(() => userForm.value.username, (newVal, oldVal) => {
+  if (userForm.value.id) return
+  if (dialogMode.value !== 'add') return
+  if (!dialogVisible.value) return             // 鈫?鏂板
+  if (!newVal?.trim()) {
+    usernameCheckStatus.value = 'idle'         // 鈫?鏂板锛氱┖鍊兼椂閲嶇疆鐘舵€?    return
+  }
+  debouncedCheckUsername(newVal.trim())
+})
+```
+
+---
+
+## 鏈淇娑夊強鏂囦欢
+
+| 鏂囦欢 | 淇敼鍐呭 |
+|------|----------|
+| [Home.vue](file:///d:/Desktop/鏂板缓鏂囦欢澶?20(2)/label-2753/2753/frontend/src/views/Home.vue) | 鐢ㄦ埛鍚?瀵嗙爜/纭瀵嗙爜杈撳叆妗嗘坊鍔?`name`銆乣autocomplete="new-password"`銆乣data-lpignore`銆乣data-1p-ignore`锛沗handleAdd` 娣诲姞 `nextTick` 浜屾娓呯┖閫昏緫锛涙墍鏈夊紓姝ュ洖璋冿紙`debouncedCheckUsername`銆乣onUsernameBlur`銆乣validateUsername`锛夋坊鍔?`dialogMode`/`dialogVisible` 鏍￠獙锛沗watch` 娣诲姞 `dialogVisible` 瀹堝崼鍜岀┖鍊肩姸鎬侀噸缃?|
+
+---
+
+## 楠岃瘉鏂规硶
+
+### 涓€銆佹祻瑙堝櫒鑷姩濉厖娴嬭瘯锛堟渶鍏抽敭锛?
+```
+鍓嶇疆鏉′欢锛氫娇鐢?Chrome 娴忚鍣紝宸蹭繚瀛樹簡璇ョ郴缁熺殑鐧诲綍鍑嵁
+
+鎿嶄綔姝ラ锛?1. 鎵撳紑鐢ㄦ埛绠＄悊椤甸潰
+2. 鐐瑰嚮"鏂板鐢ㄦ埛"鎸夐挳
+3. 瑙傚療鐢ㄦ埛鍚嶈緭鍏ユ
+
+棰勬湡缁撴灉锛?- 鐢ㄦ埛鍚嶈緭鍏ユ涓虹┖锛堜慨澶嶅墠浼氳鑷姩濉厖褰撳墠鐧诲綍鐢ㄦ埛鍚嶏級
+- 涓嶆樉绀洪噸鍚嶆牎楠岀姸鎬?- 瀵嗙爜/纭瀵嗙爜杈撳叆妗嗕篃涓虹┖
+```
+
+### 浜屻€佸瘑鐮佺鐞嗗櫒鍏煎鎬ф祴璇?
+| 瀵嗙爜绠＄悊鍣?| 鎿嶄綔姝ラ | 棰勬湡缁撴灉 |
+|-----------|---------|---------|
+| Chrome 鍐呯疆 | 淇濆瓨杩囪绯荤粺鐧诲綍鍑嵁鍚庢墦寮€鏂板鐢ㄦ埛寮圭獥 | 鐢ㄦ埛鍚嶅拰瀵嗙爜鍧囦负绌?|
+| LastPass | 瀹夎 LastPass 鎵╁睍鍚庢墦寮€鏂板鐢ㄦ埛寮圭獥 | 涓嶅嚭鐜拌嚜鍔ㄥ～鍏呮彁绀?|
+| 1Password | 瀹夎 1Password 鎵╁睍鍚庢墦寮€鏂板鐢ㄦ埛寮圭獥 | 涓嶅嚭鐜拌嚜鍔ㄥ～鍏呮彁绀?|
+| Edge 鍐呯疆 | 淇濆瓨杩囪绯荤粺鐧诲綍鍑嵁鍚庢墦寮€鏂板鐢ㄦ埛寮圭獥 | 鐢ㄦ埛鍚嶅拰瀵嗙爜鍧囦负绌?|
+
+### 涓夈€佸紓姝ュ洖璋冨畨鍏ㄦ€ф祴璇?
+| 娴嬭瘯鍦烘櫙 | 鎿嶄綔姝ラ | 棰勬湡缁撴灉 |
+|----------|---------|---------|
+| 蹇€熷垏鎹㈡ā寮?| 鍏堢偣缂栬緫锛岀珛鍗崇偣鏂板鐢ㄦ埛 | 鏂板寮圭獥鐢ㄦ埛鍚嶄负绌猴紝鏃犳牎楠屾畫鐣?|
+| 杈撳叆涓叧闂脊绐?| 鏂板鐢ㄦ埛杈撳叆鐢ㄦ埛鍚嶏紝500ms 鍐呭叧闂?| 瀹氭椂鍣ㄦ竻闄わ紝涓嶅彂璧疯姹?|
+| 璇锋眰涓叧闂脊绐?| 杈撳叆鐢ㄦ埛鍚嶏紝璇锋眰涓叧闂?| 鍝嶅簲琚涪寮冿紝涓嶆洿鏂扮姸鎬?|
+| 璇锋眰涓垏鎹㈡ā寮?| 杈撳叆鐢ㄦ埛鍚嶅悗鐐瑰嚮缂栬緫鍙︿竴鐢ㄦ埛 | 鏍￠獙缁撴灉琚涪寮冿紝涓嶅共鎵扮紪杈戣〃鍗?|
+
+### 鍥涖€乶extTick 浜屾娓呯┖娴嬭瘯
+
+```
+鎿嶄綔姝ラ锛堟ā鎷熸瀬绔満鏅級锛?1. 浣跨敤娴忚鍣ㄥ紑鍙戣€呭伐鍏凤紝鍦?el-dialog 鎵撳紑鍚庢墜鍔ㄨ缃?input 鐨?value
+2. 瑙傚療鐢ㄦ埛鍚嶅瓧娈?
+棰勬湡缁撴灉锛?- nextTick 鍥炶皟妫€娴嬪埌 username 闈炵┖锛岃嚜鍔ㄦ竻绌?- clearValidate 娓呴櫎鎵€鏈夋牎楠岀姸鎬?```
+
+---
+
+## 闂棰勯槻寤鸿
+
+### 1. 闃叉娴忚鍣ㄨ嚜鍔ㄥ～鍐欑殑灞炴€х粍鍚堟竻鍗?
+瀵逛簬闈炵櫥褰曞満鏅殑琛ㄥ崟锛堝绠＄悊鍛樻柊澧炲叾浠栫敤鎴凤級锛屽繀椤诲悓鏃朵娇鐢ㄤ互涓嬪睘鎬э細
+
+```html
+<!-- 鐢ㄦ埛鍚?-->
+<el-input name="new-username" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
+
+<!-- 瀵嗙爜 -->
+<el-input type="password" name="new-password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
+```
+
+**涓轰粈涔堜笉鐢?`autocomplete="off"`锛?*
+- Chrome 鑷?2019 骞磋捣蹇界暐 `autocomplete="off"` 鐢ㄤ簬鐢ㄦ埛鍚?瀵嗙爜瀛楁
+- `autocomplete="new-password"` 鏄?Chrome 鍞竴璇嗗埆涓?涓嶈嚜鍔ㄥ～鍏?鐨勫€?- `data-lpignore` 鍜?`data-1p-ignore` 鍒嗗埆閽堝 LastPass 鍜?1Password
+
+### 2. destroy-on-close 琛ㄥ崟鐨?nextTick 瀹堝崼
+
+褰撲娇鐢?`destroy-on-close` 鐨勫璇濇鍖呭惈琛ㄥ崟鏃讹紝蹇呴』鍦?`nextTick` 涓仛浜屾鏍￠獙锛?
+```typescript
+dialogVisible.value = true
+nextTick(() => {
+  // 娴忚鍣ㄥ彲鑳藉湪 DOM 閲嶅缓鍚庡紓姝ュ～鍏呰〃鍗?  // Vue 鍝嶅簲寮忕郴缁熸棤娉曟劅鐭ユ祻瑙堝櫒鐩存帴淇敼 DOM 鐨勮涓?  // 鎵€浠ラ渶瑕佸湪 nextTick 涓墜鍔ㄦ牎楠屽苟娓呯┖
+  if (琛ㄥ崟瀛楁琚剰澶栧～鍏? {
+    娓呯┖琛ㄥ崟
+    clearValidate()
+  }
+})
+```
+
+### 3. 寮傛鍥炶皟涓夐噸瀹堝崼鍘熷垯
+
+浠讳綍娑夊強寮傛鎿嶄綔骞舵洿鏂板叡浜姸鎬佺殑鍥炶皟锛屽繀椤婚伒寰笁閲嶅畧鍗細
+
+```typescript
+const doAsync = async () => {
+  const result = await someAsyncOperation()
+  // 瀹堝崼1锛氭ā寮忔槸鍚︽纭?  if (dialogMode.value !== 'add') return
+  // 瀹堝崼2锛氬璇濇鏄惁浠嶇劧鍙
+  if (!dialogVisible.value) return
+  // 瀹堝崼3锛氳〃鍗曟暟鎹槸鍚︿粛鐒舵湁鏁?  if (userForm.value.id) return
+  // 瀹夊叏鏇存柊鐘舵€?  usernameCheckStatus.value = result ? 'available' : 'unavailable'
+}
+```
+
+### 4. 涓嶅悓 autocomplete 鍊肩殑琛屼负宸紓
+
+| autocomplete 鍊?| Chrome 琛屼负 | Firefox 琛屼负 | 鐢ㄩ€?|
+|-----------------|------------|-------------|------|
+| `off` | **琚拷鐣?*锛堢敤鎴峰悕/瀵嗙爜瀛楁锛?| 閮ㄥ垎灏婇噸 | 鉂?涓嶆帹鑽愮敤浜庢晱鎰熷瓧娈?|
+| `new-password` | 涓嶈嚜鍔ㄥ～鍏?| 涓嶈嚜鍔ㄥ～鍏?| 鉁?鎺ㄨ崘鐢ㄤ簬鏂板瀵嗙爜鍦烘櫙 |
+| `one-time-code` | 涓嶈嚜鍔ㄥ～鍏?| 涓嶈嚜鍔ㄥ～鍏?| 閫傜敤浜庨獙璇佺爜杈撳叆 |
+| `username` | 鑷姩濉厖 | 鑷姩濉厖 | 浠呯敤浜庣櫥褰曡〃鍗?|
+
+---
+
+## 鎬荤粨锛氳嚜鍔ㄥ～鍐欓棶棰樼殑涓夊眰闃插尽浣撶郴
+
+| 灞傛 | 闃插尽鎵嬫 | 瑙ｅ喅鐨勯棶棰?|
+|------|---------|------------|
+| **杈撳叆灞?* | `name` + `autocomplete="new-password"` + `data-lpignore` + `data-1p-ignore` | 闃绘娴忚鍣?瀵嗙爜绠＄悊鍣ㄨ瘑鍒苟濉厖 |
+| **DOM 灞?* | `nextTick` 浜屾娓呯┖ + `clearValidate` | 娓呴櫎缁曡繃 Vue 鍝嶅簲寮忕殑 DOM 绾у～鍏?|
+| **閫昏緫灞?* | 寮傛鍥炶皟涓夐噸瀹堝崼锛坉ialogMode + dialogVisible + id锛?| 闃叉绔炴€佹潯浠跺拰鏃犳晥鐘舵€佹洿鏂?|
+
+**鏍稿績鏁欒**锛氭祻瑙堝櫒鑷姩濉厖鏄竴涓法灞傞棶棰橈紝鍗曚竴灞傛鐨勪慨澶嶆棤娉曞交搴曡В鍐炽€傚繀椤讳粠杈撳叆灞炴€э紙闃茶瘑鍒級銆丏OM 鏇存柊锛堥槻缁曡繃锛夈€侀€昏緫鏍￠獙锛堥槻绔炴€侊級涓変釜灞傞潰鍚屾椂闃插尽銆備笂涓€杞彧淇簡閫昏緫灞傦紝閬楁紡浜嗘渶鍏抽敭鐨勮緭鍏ュ眰闃插尽锛屾墍浠ラ棶棰樹緷鏃у瓨鍦ㄣ€?

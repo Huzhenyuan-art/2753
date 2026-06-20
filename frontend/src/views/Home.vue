@@ -200,7 +200,10 @@
             :disabled="!!userForm.id" 
             placeholder="登录使用的唯一账号"
             @blur="onUsernameBlur"
-            autocomplete="off"
+            name="new-username"
+            autocomplete="new-password"
+            data-lpignore="true"
+            data-1p-ignore="true"
           >
             <template #suffix>
               <span v-if="usernameCheckStatus === 'checking'" class="username-check-indicator">
@@ -219,7 +222,7 @@
           </el-input>
         </el-form-item>
         <el-form-item label="登录密码" prop="password" :rules="userForm.id ? [] : userRules.password">
-          <el-input v-model="userForm.password" type="password" show-password placeholder="长度需在 6-20 位之间" />
+          <el-input v-model="userForm.password" type="password" show-password placeholder="长度需在 6-20 位之间" name="new-password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
           <div v-if="userForm.password" class="password-strength">
             <div class="strength-bar">
               <div 
@@ -234,7 +237,7 @@
           </div>
         </el-form-item>
         <el-form-item v-if="!userForm.id" label="确认密码" prop="confirmPassword">
-          <el-input v-model="userForm.confirmPassword" type="password" show-password placeholder="请再次输入密码" />
+          <el-input v-model="userForm.confirmPassword" type="password" show-password placeholder="请再次输入密码" name="confirm-password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
         </el-form-item>
         <el-form-item label="姓名 / 昵称" prop="nickname">
           <el-input v-model="userForm.nickname" placeholder="显示的真实姓名" />
@@ -267,7 +270,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
@@ -385,6 +388,7 @@ const debouncedCheckUsername = (username: string, excludeId?: number) => {
   usernameDebounceTimer = setTimeout(async () => {
     try {
       const available = await checkUsernameAvailable(username, excludeId)
+      if (dialogMode.value !== 'add' || !dialogVisible.value) return
       usernameCheckStatus.value = available ? 'available' : 'unavailable'
     } catch (e: any) {
       if (e.name === 'AbortError' || e.code === 'ERR_CANCELED') {
@@ -397,17 +401,19 @@ const debouncedCheckUsername = (username: string, excludeId?: number) => {
 
 const onUsernameBlur = () => {
   if (userForm.value.id) return
+  if (dialogMode.value !== 'add') return
+  if (!dialogVisible.value) return
   const username = userForm.value.username?.trim()
   if (!username) return
-  if (usernameCheckStatus.value !== 'checking') {
-    usernameCheckStatus.value = 'checking'
-  }
+  usernameCheckStatus.value = 'checking'
   if (usernameDebounceTimer) {
     clearTimeout(usernameDebounceTimer)
+    usernameDebounceTimer = null
   }
   ;(async () => {
     try {
-      const available = await checkUsernameAvailable(username, userForm.value.id)
+      const available = await checkUsernameAvailable(username)
+      if (dialogMode.value !== 'add' || !dialogVisible.value) return
       usernameCheckStatus.value = available ? 'available' : 'unavailable'
     } catch (e: any) {
       if (e.name === 'AbortError' || e.code === 'ERR_CANCELED') {
@@ -453,9 +459,17 @@ const validateUsername = async (_rule: any, value: string, callback: any) => {
     callback()
     return
   }
+  if (dialogMode.value !== 'add') {
+    callback()
+    return
+  }
   try {
     if (usernameCheckStatus.value === 'checking') {
-      const available = await checkUsernameAvailable(trimmed, userForm.value.id)
+      const available = await checkUsernameAvailable(trimmed)
+      if (dialogMode.value !== 'add' || !dialogVisible.value) {
+        callback()
+        return
+      }
       usernameCheckStatus.value = available ? 'available' : 'unavailable'
       if (!available) {
         callback(new Error('用户名已被占用，请更换'))
@@ -558,6 +572,16 @@ const handleAdd = () => {
     usernameCheckAbortController = null
   }
   dialogVisible.value = true
+  nextTick(() => {
+    if (dialogMode.value !== 'add') return
+    if (userForm.value.username && !userForm.value.id) {
+      userForm.value.username = ''
+      userForm.value.password = ''
+      userForm.value.confirmPassword = ''
+      usernameCheckStatus.value = 'idle'
+    }
+    userFormRef.value?.clearValidate()
+  })
 }
 
 const confirmToggleStatus = (row: any) => {
@@ -620,10 +644,15 @@ watch(() => userForm.value.password, () => {
   }
 })
 
-watch(() => userForm.value.username, (newVal) => {
+watch(() => userForm.value.username, (newVal, oldVal) => {
   if (userForm.value.id) return
   if (dialogMode.value !== 'add') return
-  debouncedCheckUsername(newVal?.trim(), userForm.value.id)
+  if (!dialogVisible.value) return
+  if (!newVal?.trim()) {
+    usernameCheckStatus.value = 'idle'
+    return
+  }
+  debouncedCheckUsername(newVal.trim())
 })
 
 watch(() => dialogVisible.value, (val) => {
