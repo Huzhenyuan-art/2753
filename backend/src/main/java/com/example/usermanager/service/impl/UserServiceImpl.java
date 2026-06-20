@@ -25,11 +25,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public String login(String username, String password) {
         User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-        if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
-            return null;
+        if (user == null) {
+            throw new RuntimeException("USER_NOT_FOUND");
+        }
+        if (!passwordEncoder.matches(password, user.getPassword())) {
+            throw new RuntimeException("PASSWORD_ERROR");
         }
         if (user.getStatus() != null && user.getStatus() == 0) {
-            throw new RuntimeException("账号已被禁用，请联系管理员");
+            throw new RuntimeException("ACCOUNT_DISABLED");
         }
         return jwtUtils.generateToken(username);
     }

@@ -28,6 +28,10 @@
           <div class="options">
             <el-checkbox v-model="rememberMe">记住用户名</el-checkbox>
           </div>
+          <div v-if="loginError.show" class="login-error">
+            <el-icon class="error-icon"><Warning /></el-icon>
+            <span class="error-text">{{ loginError.message }}</span>
+          </div>
           <el-button type="primary" :loading="loading" class="login-btn" size="large" @click="handleLogin">
             登 录
           </el-button>
@@ -38,11 +42,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import request from '@/utils/request'
 import { ElMessage } from 'element-plus'
+import { Warning } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -52,10 +57,34 @@ const rememberMe = ref(false)
 const loading = ref(false)
 const loginFormRef = ref()
 
+const loginError = reactive({
+  show: false,
+  message: '',
+  type: ''
+})
+
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
+
+watch(
+  () => loginForm.value.username,
+  () => {
+    if (loginError.show) {
+      loginError.show = false
+    }
+  }
+)
+
+watch(
+  () => loginForm.value.password,
+  () => {
+    if (loginError.show) {
+      loginError.show = false
+    }
+  }
+)
 
 onMounted(() => {
   const savedUsername = localStorage.getItem('saved_username')
@@ -65,16 +94,59 @@ onMounted(() => {
   }
 })
 
+const setLoginError = (type: string, message: string) => {
+  loginError.type = type
+  loginError.message = message
+  loginError.show = true
+}
+
+const handleLoginError = (error: any) => {
+  if (error.type === 'business') {
+    const code = error.code
+    switch (code) {
+      case 10001:
+        setLoginError('user_not_found', '用户名不存在，请检查后重试')
+        break
+      case 10002:
+        setLoginError('password_error', '密码错误，请重新输入')
+        break
+      case 10003:
+        setLoginError('account_disabled', '账号已被禁用，请联系管理员')
+        break
+      default:
+        setLoginError('unknown', error.message || '登录失败，请重试')
+    }
+  } else if (error.type === 'timeout') {
+    setLoginError('timeout', '请求超时，请检查网络连接后重试')
+  } else if (error.type === 'network') {
+    setLoginError('network', '网络连接异常，请检查网络设置')
+  } else if (error.type === 'http') {
+    const status = error.status
+    if (status === 500) {
+      setLoginError('server_error', '服务器内部错误，请稍后重试')
+    } else if (status === 502 || status === 503) {
+      setLoginError('service_unavailable', '服务暂时不可用，请稍后重试')
+    } else if (status === 404) {
+      setLoginError('not_found', '请求的服务不存在')
+    } else {
+      setLoginError('http_error', `请求失败 (${status})，请稍后重试`)
+    }
+  } else {
+    setLoginError('unknown', '登录失败，请稍后重试')
+  }
+}
+
 const handleLogin = async () => {
   await loginFormRef.value.validate()
   loading.value = true
+  loginError.show = false
   try {
-    const res: any = await request.post('/user/login', loginForm.value)
+    const res: any = await request.post('/user/login', loginForm.value, { skipErrorToast: true } as any)
     userStore.setToken(res.data)
     const userInfo = await userStore.fetchUserInfo()
     if (userInfo && userInfo.status === 0) {
       userStore.logout()
-      ElMessage.error('账号已被禁用，请联系管理员')
+      setLoginError('account_disabled', '账号已被禁用，请联系管理员')
       return
     }
     if (rememberMe.value) {
@@ -85,8 +157,9 @@ const handleLogin = async () => {
     localStorage.removeItem('saved_login')
     ElMessage.success('登录成功')
     router.push('/')
-  } catch (error) {
+  } catch (error: any) {
     console.error(error)
+    handleLoginError(error)
   } finally {
     loading.value = false
   }
@@ -198,6 +271,29 @@ const handleLogin = async () => {
 
 .login-btn:active {
   transform: translateY(0);
+}
+
+.login-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #dc2626;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.login-error .error-icon {
+  flex-shrink: 0;
+  font-size: 18px;
+}
+
+.login-error .error-text {
+  flex: 1;
 }
 
 /* Animations */

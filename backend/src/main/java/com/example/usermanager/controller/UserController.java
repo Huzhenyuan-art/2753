@@ -30,12 +30,19 @@ public class UserController {
         String password = loginData.get("password");
         try {
             String token = userService.login(username, password);
-            if (token != null) {
-                return Result.success(token);
-            }
-            return Result.error(401, "用户名或密码错误");
+            return Result.success(token);
         } catch (RuntimeException e) {
-            return Result.error(403, e.getMessage());
+            String errorCode = e.getMessage();
+            switch (errorCode) {
+                case "USER_NOT_FOUND":
+                    return Result.error(10001, "用户名不存在");
+                case "PASSWORD_ERROR":
+                    return Result.error(10002, "密码错误");
+                case "ACCOUNT_DISABLED":
+                    return Result.error(10003, "账号已被禁用，请联系管理员");
+                default:
+                    return Result.error(401, "登录失败，请重试");
+            }
         }
     }
 
