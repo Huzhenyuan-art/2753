@@ -271,6 +271,77 @@
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="deleteDialogVisible"
+      title="安全确认 - 删除用户"
+      width="460px"
+      destroy-on-close
+      class="delete-dialog"
+      :close-on-click-modal="false"
+    >
+      <div class="delete-warning">
+        <div class="warning-icon">
+          <el-icon :size="40" color="#ef4444"><WarningFilled /></el-icon>
+        </div>
+        <div class="warning-content">
+          <h4 class="warning-title">此操作将永久删除用户，不可恢复！</h4>
+          <p class="warning-desc">
+            您即将删除用户 <span class="target-user">"{{ deleteTargetRow?.nickname || deleteTargetRow?.username }}"</span>，
+            该用户的所有相关数据将被清除。
+          </p>
+        </div>
+      </div>
+      <div class="delete-verify-section">
+        <el-alert
+          title="防误删验证"
+          type="error"
+          :closable="false"
+          show-icon
+          class="verify-alert"
+        >
+          <template #default>
+            为防止误操作，请手动输入目标用户的
+            <span class="verify-username-highlight">用户名</span>
+            （登录账号）以确认删除：
+            <span class="verify-target-name">{{ deleteTargetRow?.username }}</span>
+          </template>
+        </el-alert>
+        <el-form :model="deleteVerifyForm" :rules="deleteVerifyRules" ref="deleteVerifyFormRef" label-position="top">
+          <el-form-item label="请输入用户名" prop="confirmUsername">
+            <el-input
+              v-model="deleteVerifyForm.confirmUsername"
+              :placeholder="`请输入用户名：${deleteTargetRow?.username}`"
+              clearable
+              @input="onDeleteVerifyInput"
+              name="delete-confirm-username"
+              autocomplete="off"
+              data-lpignore="true"
+              data-1p-ignore="true"
+            />
+          </el-form-item>
+        </el-form>
+        <div v-if="deleteVerifyError" class="verify-error-tip">
+          <el-icon><CircleCloseFilled /></el-icon>
+          <span>{{ deleteVerifyError }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="cancelDelete" round>取 消</el-button>
+          <el-button
+            type="danger"
+            :loading="deleteSubmitting"
+            :disabled="!isDeleteVerified"
+            @click="confirmDeleteSubmit"
+            round
+          >
+            <el-icon><Delete /></el-icon>
+            确认永久删除
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -278,7 +349,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock } from '@element-plus/icons-vue'
+import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, WarningFilled, Delete } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 
@@ -362,6 +433,40 @@ const userForm = ref<any>({
 
 const avatarPreview = ref('')
 const avatarFile = ref<File | null>(null)
+
+const deleteDialogVisible = ref(false)
+const deleteTargetRow = ref<any>(null)
+const deleteSubmitting = ref(false)
+const deleteVerifyError = ref('')
+const deleteVerifyFormRef = ref()
+const deleteVerifyForm = ref({
+  confirmUsername: ''
+})
+const isDeleteVerified = computed(() => {
+  if (!deleteTargetRow.value?.username) return false
+  return deleteVerifyForm.value.confirmUsername.trim() === deleteTargetRow.value.username
+})
+const validateConfirmUsername = (_rule: any, value: string, callback: any) => {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    callback(new Error('请输入目标用户名'))
+    return
+  }
+  if (trimmed !== deleteTargetRow.value?.username) {
+    callback(new Error('用户名不匹配，请重新输入'))
+    return
+  }
+  callback()
+}
+const deleteVerifyRules = {
+  confirmUsername: [
+    { required: true, message: '请输入目标用户名', trigger: 'blur' },
+    { validator: validateConfirmUsername, trigger: ['blur', 'input'] }
+  ]
+}
+const onDeleteVerifyInput = () => {
+  deleteVerifyError.value = ''
+}
 
 type UsernameCheckStatus = 'idle' | 'checking' | 'available' | 'unavailable'
 const usernameCheckStatus = ref<UsernameCheckStatus>('idle')
@@ -772,21 +877,43 @@ const confirmDelete = (row: any) => {
     ElMessage.warning('您没有删除用户的权限')
     return
   }
-  ElMessageBox.confirm(
-    `确定要永久删除用户 "${row.nickname}" 吗？此操作不可撤销。`,
-    '安全确认',
-    {
-      confirmButtonText: '确定删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-      confirmButtonClass: 'el-button--danger',
-      roundButton: true
-    }
-  ).then(async () => {
-    await request.delete(`/user/${row.id}`)
-    ElMessage.success('已移出成员')
-    fetchData()
+  deleteTargetRow.value = row
+  deleteVerifyForm.value = { confirmUsername: '' }
+  deleteVerifyError.value = ''
+  deleteDialogVisible.value = true
+  nextTick(() => {
+    deleteVerifyFormRef.value?.clearValidate()
   })
+}
+
+const cancelDelete = () => {
+  deleteDialogVisible.value = false
+  deleteTargetRow.value = null
+  deleteVerifyForm.value = { confirmUsername: '' }
+  deleteVerifyError.value = ''
+  deleteSubmitting.value = false
+}
+
+const confirmDeleteSubmit = async () => {
+  if (!isDeleteVerified.value) {
+    deleteVerifyError.value = '请输入正确的用户名后再执行删除操作'
+    return
+  }
+  try {
+    await deleteVerifyFormRef.value.validate()
+  } catch (e) {
+    deleteVerifyError.value = '用户名验证失败，请重新输入'
+    return
+  }
+  deleteSubmitting.value = true
+  try {
+    await request.delete(`/user/${deleteTargetRow.value.id}`)
+    ElMessage.success(`已永久删除用户 "${deleteTargetRow.value.nickname || deleteTargetRow.value.username}"`)
+    fetchData()
+    cancelDelete()
+  } finally {
+    deleteSubmitting.value = false
+  }
 }
 
 const goProfile = () => {
@@ -1146,5 +1273,130 @@ onMounted(async () => {
 
 .check-text.unavailable {
   color: #ef4444;
+}
+
+.delete-dialog :deep(.el-dialog) {
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.delete-dialog :deep(.el-dialog__header) {
+  margin-right: 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.delete-dialog :deep(.el-dialog__title) {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.delete-warning {
+  display: flex;
+  gap: 16px;
+  padding: 20px;
+  background: linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  border: 1px solid #fecaca;
+}
+
+.warning-icon {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  background: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.15);
+}
+
+.warning-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.warning-title {
+  margin: 0 0 8px 0;
+  color: #dc2626;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.warning-desc {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.target-user {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.delete-verify-section {
+  margin-bottom: 8px;
+}
+
+.verify-alert {
+  margin-bottom: 20px;
+  border-radius: 10px;
+}
+
+.verify-alert :deep(.el-alert__description) {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.verify-username-highlight {
+  color: #dc2626;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.verify-target-name {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 10px;
+  background: #fff;
+  border: 1px dashed #fca5a5;
+  border-radius: 6px;
+  color: #dc2626;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 13px;
+}
+
+.delete-verify-section :deep(.el-form-item__label) {
+  font-weight: 600;
+  color: #475569;
+}
+
+.delete-verify-section :deep(.el-input__wrapper) {
+  border-radius: 10px;
+  transition: all 0.2s;
+}
+
+.delete-verify-section :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2) inset;
+}
+
+.verify-error-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: -4px;
 }
 </style>
