@@ -1,5 +1,6 @@
 package com.example.usermanager.dto;
 
+import com.example.usermanager.entity.Dept;
 import com.example.usermanager.entity.Permission;
 import com.example.usermanager.entity.Role;
 import lombok.Data;
@@ -25,5 +26,5 @@ public class LoginUserDTO {
     private List<Permission> permissions;
     private List<String> roleCodes;
     private List<String> permissionCodes;
-    private List<com.example.usermanager.entity.Dept> depts;
+    private List<Dept> depts;
 }

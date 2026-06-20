@@ -2828,6 +2828,403 @@ ORDER BY create_time DESC
 LIMIT 10;
 ```
 
+---
+
+# 部门组织架构模块 Maven 编译错误修复指南
+
+## 问题描述
+
+在新增部门组织架构模块后，Docker 容器构建过程中后端 Maven 编译失败，出现多个编译错误：
+
+```
+[ERROR] /app/src/main/java/com/example/usermanager/entity/User.java:[43,44]
+  找不到符号
+  符号:   类 List
+  位置: 类 com.example.usermanager.entity.User
+
+[ERROR] /app/src/main/java/com/example/usermanager/dto/RefreshTokenDTO.java:[14,17]
+  找不到符号
+  符号:   方法 setDepts(java.util.List<com.example.usermanager.entity.Dept>)
+  位置: 类型为 com.example.usermanager.dto.RefreshTokenDTO 的变量 dto
+```
+
+BUILD FAILURE，整个 Docker 镜像构建流程中断。
+
+---
+
+## 根因分析
+
+本次编译错误由 **3 个独立问题** 共同导致，均为新增部门模块时的代码遗漏：
+
+### 问题一：User.java 缺少 `java.util.List` import
+
+在 [User.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/entity/User.java#L42-L47) 中新增了两个 `List` 类型字段，但忘记添加对应的 import 语句：
+
+```java
+// 新增字段（第 43-46 行）
+@TableField(exist = false)
+private List<com.example.usermanager.entity.Dept> depts;  // ← 使用了 List
+
+@TableField(exist = false)
+private List<Long> deptIds;  // ← 使用了 List
+
+// 但缺少：
+// import java.util.List;  ← 缺失！
+```
+
+### 问题二：RefreshTokenDTO 缺少 `depts` 字段定义
+
+在 [UserServiceImpl.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java#L164-L165) 的 `refreshToken()` 方法中调用了 `dto.setDepts()`：
+
+```java
+List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+dto.setDepts(depts);  // ← 调用了 setDepts()
+```
+
+但 [RefreshTokenDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/RefreshTokenDTO.java) 中从未定义 `depts` 字段，Lombok 的 `@Data` 注解自然不会生成 `setDepts()` 方法。
+
+### 问题三：LoginUserDTO 中部门信息使用全限定类名而非 import
+
+[LoginUserDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/LoginUserDTO.java#L28) 使用了全限定类名 `List<com.example.usermanager.entity.Dept>`，虽然语法上允许，但与项目其他代码的 import 风格不一致，且增加了维护成本。
+
+```java
+// 不符合项目风格的写法
+private List<com.example.usermanager.entity.Dept> depts;
+```
+
+### 问题四（一致性问题）：login() 方法返回的 DTO 未包含部门信息
+
+`refreshToken()` 方法补充了部门信息，但 `login()` 方法遗漏了，导致登录和刷新 token 两个接口返回的数据结构不一致。前端 store 在处理登录结果时，无法获取 `depts` 字段。
+
+---
+
+## 修复方案
+
+采用 **最小改动原则**，对 4 个文件进行精确修改：
+
+### 改动一：User.java 添加缺失的 import
+
+修改 [User.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/entity/User.java#L6-L8)：
+
+```java
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;          // ← 新增此行
+```
+
+### 改动二：RefreshTokenDTO 补充 depts 字段和 import
+
+修改 [RefreshTokenDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/RefreshTokenDTO.java)：
+
+```java
+// 修改前
+package com.example.usermanager.dto;
+
+import lombok.Data;
+
+@Data
+public class RefreshTokenDTO {
+    private String token;
+    private String refreshToken;
+    private Long accessTokenExpiresIn;
+    private Long refreshTokenExpiresIn;
+}
+
+// 修改后
+package com.example.usermanager.dto;
+
+import com.example.usermanager.entity.Dept;  // ← 新增
+import lombok.Data;
+
+import java.util.List;                       // ← 新增
+
+@Data
+public class RefreshTokenDTO {
+    private String token;
+    private String refreshToken;
+    private Long accessTokenExpiresIn;
+    private Long refreshTokenExpiresIn;
+    private List<Dept> depts;                // ← 新增：部门列表
+}
+```
+
+### 改动三：LoginUserDTO 改用 import 导入 Dept
+
+修改 [LoginUserDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/LoginUserDTO.java#L3-L29)：
+
+```java
+// 修改前
+import com.example.usermanager.entity.Permission;
+import com.example.usermanager.entity.Role;
+// ...
+private List<com.example.usermanager.entity.Dept> depts;
+
+// 修改后
+import com.example.usermanager.entity.Dept;        // ← 新增 import
+import com.example.usermanager.entity.Permission;
+import com.example.usermanager.entity.Role;
+// ...
+private List<Dept> depts;                           // ← 使用简短类名
+```
+
+### 改动四：UserServiceImpl.login() 补充部门信息返回
+
+修改 [UserServiceImpl.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java#L104-L110)，在 `login()` 方法中与 `refreshToken()` 保持一致：
+
+```java
+// 在 dto.setPermissionCodes(permissionCodes); 之后添加：
+
+List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+dto.setDepts(depts);
+
+return dto;  // 原有 return 语句
+```
+
+---
+
+## 修复后的依赖关系与数据流
+
+### 后端数据返回一致性
+
+| 接口 | 修复前 depts 字段 | 修复后 depts 字段 |
+|------|------------------|------------------|
+| `POST /api/user/login` | ❌ 缺失 | ✅ 包含 |
+| `POST /api/user/refresh` | ❌ 编译失败 | ✅ 包含 |
+| `GET /api/user/info` | ✅ 已包含 | ✅ 包含 |
+| `GET /api/user/list` | ✅ 已包含（分页记录） | ✅ 包含 |
+
+### 前端 store 数据流
+
+```
+登录/刷新/获取用户信息接口
+    ↓ 统一返回 depts 字段
+Pinia store: setLoginData()
+    ↓ 提取 depts 保存到 userInfo
+UI 层: Home.vue / Dept.vue
+    ↓ 部门树筛选、用户部门显示
+正常渲染
+```
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| [User.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/entity/User.java#L7) | 新增 `import java.util.List;` |
+| [RefreshTokenDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/RefreshTokenDTO.java) | 新增 `import Dept`、`import java.util.List`，新增 `private List<Dept> depts` 字段 |
+| [LoginUserDTO.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/dto/LoginUserDTO.java) | 新增 `import Dept`，将全限定类名改为简短类名 |
+| [UserServiceImpl.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/service/impl/UserServiceImpl.java#L107-L108) | `login()` 方法中补充部门信息设置（`dto.setDepts()`） |
+
+---
+
+## 验证方法
+
+### 一、后端 Maven 编译验证（关键验证）
+
+```bash
+cd backend
+
+# 1. 全量清理并编译（最严格的检查）
+mvn clean compile -q
+# 预期：BUILD SUCCESS，无任何输出（-q 静默模式）
+
+# 2. 查看详细编译日志（排查问题时使用）
+mvn clean compile
+# 预期：最后一行显示 "BUILD SUCCESS"，无 [ERROR] 级别日志
+
+# 3. 打包验证（模拟 Docker 构建流程）
+mvn clean package -DskipTests -q
+# 预期：BUILD SUCCESS，target/ 目录下生成 user-manager-*.jar
+```
+
+### 二、IDE 诊断验证
+
+使用 `GetDiagnostics` 工具检查，预期返回空数组 `[]`，表示无编译错误。
+
+### 三、Docker 全链路构建验证
+
+```bash
+# 1. 清理旧构建缓存（重要！避免层缓存）
+docker-compose down -v
+docker builder prune -f
+
+# 2. 重新构建所有镜像（关键步骤）
+docker-compose build --no-cache
+
+# 观察 backend 构建阶段输出：
+#   Step 12/15 : RUN mvn -s settings.xml package -DskipTests
+#   预期：
+#     [INFO] BUILD SUCCESS
+#     [INFO] Total time:  XX s
+#   不应出现：
+#     [ERROR] ... 找不到符号
+#     [ERROR] BUILD FAILURE
+
+# 3. 启动所有服务
+docker-compose up -d
+
+# 4. 等待健康检查通过（约 2 分钟）
+docker-compose ps
+# 预期：
+#   backend  状态: Up (healthy)
+#   frontend 状态: Up
+#   db       状态: Up (healthy)
+```
+
+### 四、API 接口字段一致性验证
+
+使用 admin/123456 登录，验证三个核心接口返回的部门字段一致：
+
+```bash
+# 1. 登录接口验证
+LOGIN_RESP=$(curl -s -X POST http://localhost:32753/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}')
+
+echo $LOGIN_RESP | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+depts = data.get('data', {}).get('depts', [])
+print(f'登录接口 depts 字段: 存在={len(depts) > 0}, 数量={len(depts)}')
+for d in depts:
+    print(f'  - {d.get(\"name\")} (id={d.get(\"id\")})')
+"
+# 预期：登录接口 depts 字段存在且包含数据
+
+# 2. 刷新 token 接口验证
+REFRESH_TOKEN=$(echo $LOGIN_RESP | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['refreshToken'])")
+
+REFRESH_RESP=$(curl -s -X POST http://localhost:32753/api/user/refresh \
+  -H "Content-Type: application/json" \
+  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}")
+
+echo $REFRESH_RESP | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+depts = data.get('data', {}).get('depts', [])
+print(f'刷新接口 depts 字段: 存在={len(depts) > 0}, 数量={len(depts)}')
+"
+# 预期：刷新接口 depts 字段存在且与登录接口一致
+
+# 3. 用户信息接口验证
+ACCESS_TOKEN=$(echo $LOGIN_RESP | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+
+INFO_RESP=$(curl -s http://localhost:32753/api/user/info \
+  -H "Authorization: Bearer $ACCESS_TOKEN")
+
+echo $INFO_RESP | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+depts = data.get('data', {}).get('depts', [])
+print(f'信息接口 depts 字段: 存在={len(depts) > 0}, 数量={len(depts)}')
+"
+# 预期：三个接口返回的 depts 数量和内容完全一致
+```
+
+### 五、部门功能回归测试
+
+| 测试项 | 操作步骤 | 预期结果 |
+|--------|---------|---------|
+| Maven 编译 | `mvn clean compile` | BUILD SUCCESS |
+| Docker 构建 | `docker-compose build --no-cache` | backend 镜像构建成功 |
+| 容器启动 | `docker-compose up -d` | 三服务 healthy/Up |
+| 部门管理页面 | 浏览器访问 `/dept` | 树形表格显示部门树 |
+| 部门筛选用户 | 首页点击左侧部门节点 | 用户列表筛选出该部门用户 |
+| 新增用户选部门 | 新增用户时选择所属部门 | 用户保存后部门信息正确 |
+| 组织层级显示 | 编辑用户查看已选部门 | 正确显示「总公司 > XX部 > XX组」层级 |
+
+---
+
+## 问题预防建议
+
+### 1. 新增字段时的"双重检查"流程
+
+每次在实体类/DTO中新增 `List<Xxx>` 或其他泛型字段时，必须执行：
+
+```
+Step 1: 新增字段声明
+        ↓
+Step 2: 检查 import 区域
+        → 是否 import 了集合类型？（List/Set/Map 等）
+        → 是否 import 了泛型参数类型？（如 Dept、Role 等）
+        ↓
+Step 3: IDE 优化 import 功能
+        → 执行"Organize Imports"，确保无未使用 import 且全部都有
+```
+
+### 2. 修改 DTO 字段时的"全接口扫描"原则
+
+当修改某个接口返回的 DTO 结构时（如给 DTO 新增字段），必须：
+
+1. **全局搜索该 DTO 的 setXxx() 调用**：确认所有构造该 DTO 的地方都设置了新字段
+2. **检查所有返回该 DTO 的 Service 方法**：确保一致性
+3. **检查前端 store 的数据处理逻辑**：确认前端能正确解析新字段
+
+本次问题中，`refreshToken()` 调用了 `setDepts()` 但 DTO 没有字段，`login()` 有 DTO 但没调用 `setDepts()`——正是违反了这个原则。
+
+### 3. 使用 Maven 编译作为提交前门禁
+
+不要只依赖 IDE 的 `GetDiagnostics` 诊断（可能有缓存或漏检）。每次提交代码前：
+
+```bash
+# Windows PowerShell
+cd backend; mvn clean compile -q
+
+# 或一键脚本（可选，保存为 check-build.ps1）
+$ErrorActionPreference = "Stop"
+Write-Host "=== 后端 Maven 编译检查 ==="
+Set-Location backend
+mvn clean compile -q
+if ($LASTEXITCODE -ne 0) { throw "后端编译失败！" }
+Write-Host "后端编译通过 ✓"
+Set-Location ..
+```
+
+### 4. DTO 定义的统一风格规范
+
+| 规范 | 正确示例 | 错误示例 |
+|------|---------|---------|
+| **必须 import** 所有依赖类 | `import com.example.entity.Dept;` → `List<Dept>` | `List<com.example.entity.Dept>`（全限定名） |
+| 相关接口返回结构保持一致 | `login()` / `refreshToken()` / `info()` 都返回 `depts` | 部分接口有，部分没有 |
+| @Data 注解用在 DTO 上 | `@Data public class XxxDTO` | 手动写 getter/setter 容易漏 |
+
+### 5. CI 流水线中加入编译门禁（推荐）
+
+在 `.github/workflows/backend.yml` 或其他 CI 配置中加入：
+
+```yaml
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Maven Compile Check
+        run: cd backend && mvn clean compile -q
+      - name: Maven Package Check
+        run: cd backend && mvn clean package -DskipTests -q
+```
+
+任何 PR 在合并前，这两步必须全部通过。
+
+---
+
+## 总结：核心教训
+
+| 教训 | 说明 |
+|------|------|
+| **List/Set/Map 一定记得 import** | Java 的集合类都在 `java.util` 包，不 import 直接用一定会编译失败 |
+| **改 DTO 结构要全局扫描** | 所有构造该 DTO 的地方、所有返回该 DTO 的接口，都要同步更新 |
+| **IDE 诊断 ≠ Maven 编译** | IDE 可能缓存状态，`mvn clean compile` 才是金标准 |
+| **接口返回结构一致性** | 登录、刷新 token、获取用户信息这三个接口返回的数据结构必须完全一致 |
+| **最小改动 + 精确修复** | 缺啥补啥，不做无关重构，降低引入新问题的风险 |
+
+通过以上规范和检查流程，可以在编码阶段和提交阶段有效拦截此类编译问题，避免影响 Docker 构建和部署流程。
+
 ### 二、其他业务场景验证
 
 | 测试用例 | 预期审计日志 status |

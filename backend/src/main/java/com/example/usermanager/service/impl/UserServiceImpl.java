@@ -104,6 +104,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         dto.setRoleCodes(roleCodes);
         dto.setPermissionCodes(permissionCodes);
 
+        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+        dto.setDepts(depts);
+
         return dto;
     }
 
