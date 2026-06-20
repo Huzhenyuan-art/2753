@@ -2236,3 +2236,311 @@ curl -H "Authorization: Bearer <token>" \
 | 4️⃣ | **使用 import static 区分** | 其中一个是静态工具类的静态方法 | 极少用于类级别的冲突 |
 
 > **原则**：优先通过命名从根源避免冲突；其次才考虑技术层面的 import 处理。
+
+---
+
+# 审计日志表不存在导致查询报错修复指南
+
+## 问题描述
+
+管理员进入操作审计页面时，后端查询数据库报错表不存在，页面无法加载审计日志列表。
+
+### 典型错误信息
+
+```
+### Error querying database.  Cause: java.sql.SQLSyntaxErrorException:
+  Table 'user_management.sys_audit_log' doesn't exist
+
+### SQL: SELECT id,user_id,username,nickname,operation,module,description,
+  method,params,result,ip,status,error_msg,cost_time,create_time
+  FROM sys_audit_log
+  WHERE ...
+
+### Cause: java.sql.SQLSyntaxErrorException:
+  Table 'user_management.sys_audit_log' doesn't exist
+```
+
+前端表现为：审计日志页面加载后列表为空，浏览器控制台返回 500 错误。
+
+---
+
+## 根因分析
+
+### 核心问题：数据库 Schema 变更不会自动应用到已存在的数据库
+
+项目当前的数据库初始化机制存在 **两条路径**，但两条路径都无法为新模块自动创建表：
+
+| 初始化路径 | 机制 | 执行时机 | 对已存在数据库是否生效 |
+|-----------|------|---------|---------------------|
+| Docker MySQL init | `docker-entrypoint-initdb.d/init.sql` | 仅容器**首次**初始化时 | ❌ 不生效 |
+| Spring Boot SQL init | `spring.sql.init.mode=never` | 被显式禁用 | ❌ 不生效 |
+
+### 问题形成链条
+
+```
+① 项目首次部署
+   → Docker MySQL 容器启动，执行 init.sql
+   → 创建 sys_user、sys_role、sys_permission 等表
+   → 数据写入 mysql_data volume 持久化
+
+② 新增审计日志模块
+   → 在 init.sql 末尾追加 CREATE TABLE sys_audit_log
+   → 在 init.sql 末尾追加 INSERT audit:list 权限数据
+
+③ 重新部署（docker-compose up -d --build）
+   → MySQL 容器检测到 mysql_data volume 已有数据
+   → 跳过 docker-entrypoint-initdb.d/init.sql（不重复执行）
+   → sys_audit_log 表永远不会被创建
+
+④ 管理员访问审计日志页面
+   → 后端查询 sys_audit_log 表
+   → MySQL 报错 Table doesn't exist
+   → 返回 500 错误，页面无法加载
+```
+
+### 为什么 Docker init.sql 不会重复执行？
+
+MySQL 官方镜像的设计逻辑：
+
+1. 容器启动时检查 `/var/lib/mysql/` 目录是否为空
+2. 如果为空（首次启动） → 执行 `/docker-entrypoint-initdb.d/` 下的 `.sql` / `.sh` 文件
+3. 如果不为空（已有数据） → **跳过所有初始化脚本**
+4. Docker 命名卷 (`mysql_data`) 的生命周期独立于容器，即使 `docker-compose down` 也不会删除数据（除非 `down -v`）
+
+这意味着：**任何在 init.sql 中追加的 Schema 变更，对已存在的数据库完全无效。**
+
+### 为什么 Spring Boot SQL init 也不生效？
+
+```yaml
+spring:
+  sql:
+    init:
+      mode: never   # ← 显式禁用了 Spring Boot 的 SQL 初始化
+```
+
+---
+
+## 修复方案
+
+创建 Spring Boot 启动时自动执行的 Schema 初始化组件，使用 `CREATE TABLE IF NOT EXISTS` 和 `INSERT IGNORE` 确保幂等性，在应用启动后自动补齐缺失的表结构和权限数据。
+
+### 为什么选择应用层初始化而非修改 Docker/Spring 配置？
+
+| 方案 | 优点 | 缺点 |
+|-----|------|------|
+| **A. 应用层 ApplicationReadyEvent + JdbcTemplate** ✅ | 幂等、环境无关、自动补齐、不依赖外部机制 | 新增 1 个 Java 文件 |
+| B. 改 `spring.sql.init.mode=always` + schema.sql | Spring Boot 标准机制 | 影响全局行为，需小心与现有 init.sql 冲突；所有表都会尝试重建 |
+| C. 手动在 MySQL 中执行 DDL | 直接生效 | 不可复现、多环境需重复操作、易遗漏 |
+| D. 引入 Flyway/Liquibase | 专业的数据库版本管理 | 引入新依赖、改动大、学习成本 |
+
+### 具体实现
+
+新增 [AuditLogSchemaInitializer.java](file:///D:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/config/AuditLogSchemaInitializer.java)：
+
+```java
+@Slf4j
+@Component
+public class AuditLogSchemaInitializer {
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public AuditLogSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void initAuditLogTable() {
+        try {
+            // 1. 创建审计日志表（IF NOT EXISTS 保证幂等）
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS sys_audit_log (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+                    user_id BIGINT COMMENT '操作人ID',
+                    username VARCHAR(50) COMMENT '操作人用户名',
+                    nickname VARCHAR(50) COMMENT '操作人昵称',
+                    operation VARCHAR(50) NOT NULL COMMENT '操作类型',
+                    module VARCHAR(50) COMMENT '操作模块',
+                    description VARCHAR(500) COMMENT '操作描述',
+                    method VARCHAR(200) COMMENT '请求方法',
+                    params TEXT COMMENT '请求参数',
+                    result TEXT COMMENT '返回结果',
+                    ip VARCHAR(50) COMMENT 'IP地址',
+                    status TINYINT DEFAULT 1 COMMENT '操作状态：1-成功，0-失败',
+                    error_msg VARCHAR(1000) COMMENT '错误信息',
+                    cost_time BIGINT COMMENT '耗时（毫秒）',
+                    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+                    INDEX idx_user_id (user_id),
+                    INDEX idx_username (username),
+                    INDEX idx_operation (operation),
+                    INDEX idx_create_time (create_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='操作审计日志表'
+                """);
+
+            // 2. 插入审计日志权限数据（INSERT IGNORE 保证幂等）
+            jdbcTemplate.update("""
+                INSERT IGNORE INTO sys_permission (name, code, type, description)
+                VALUES ('查看审计日志', 'audit:list', 'BUTTON', '查看操作审计日志权限')
+                """);
+
+            // 3. 为 ADMIN 角色关联审计日志权限
+            jdbcTemplate.update("""
+                INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
+                SELECT r.id, p.id FROM sys_role r, sys_permission p
+                WHERE r.code = 'ADMIN' AND p.code = 'audit:list'
+                """);
+
+            log.info("审计日志模块数据库初始化完成");
+        } catch (Exception e) {
+            log.error("审计日志模块数据库初始化失败: {}", e.getMessage(), e);
+        }
+    }
+}
+```
+
+### 关键设计要点
+
+| 设计点 | 实现 | 说明 |
+|-------|------|------|
+| 执行时机 | `@EventListener(ApplicationReadyEvent.class)` | 在 Spring 容器完全启动后执行，确保 DataSource/JdbcTemplate 已就绪 |
+| 幂等性 | `CREATE TABLE IF NOT EXISTS` + `INSERT IGNORE` | 重复执行不会报错，不会重复创建/插入 |
+| 依赖注入 | 构造器注入 `JdbcTemplate` | MyBatis-Plus starter 已传递依赖 spring-boot-starter-jdbc，JdbcTemplate 自动可用 |
+| 错误处理 | try-catch 包裹，只记日志不抛异常 | Schema 初始化失败不应阻断应用启动（降级运行） |
+| 数据完整性 | 同时补齐表 + 权限 + 角色关联 | 模块自包含，所有数据库依赖一次性到位 |
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/src/main/java/com/example/usermanager/config/AuditLogSchemaInitializer.java` | **新增文件**，应用启动时自动创建 `sys_audit_log` 表、插入 `audit:list` 权限数据、关联 ADMIN 角色 |
+
+---
+
+## 验证方法
+
+### 一、已有数据库环境验证（核心场景）
+
+```bash
+# 1. 确保 MySQL 容器已有数据（sys_user 等表存在）
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SHOW TABLES;"
+
+# 2. 重新构建并启动后端
+docker-compose up -d --build backend
+
+# 3. 检查后端启动日志
+docker-compose logs backend | grep "审计日志"
+# 预期输出：
+#   审计日志模块数据库初始化完成
+
+# 4. 确认表已创建
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SHOW TABLES LIKE 'sys_audit_log';"
+# 预期输出：
+#   sys_audit_log
+
+# 5. 确认权限数据已插入
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SELECT * FROM sys_permission WHERE code='audit:list';"
+# 预期输出：1 行数据
+
+# 6. 管理员登录并访问审计日志页面
+# 预期：页面正常加载，不再报 500 错误
+```
+
+### 二、全新数据库环境验证
+
+```bash
+# 1. 清空所有数据（危险！仅测试用）
+docker-compose down -v
+
+# 2. 重新构建并启动
+docker-compose up -d --build
+
+# 3. 等待所有服务 healthy
+docker ps
+
+# 4. 确认表存在且无重复创建
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SHOW TABLES;"
+# 预期：包含 sys_audit_log 及所有其他表
+
+# 5. 确认权限数据无重复
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SELECT COUNT(*) FROM sys_permission WHERE code='audit:list';"
+# 预期：COUNT = 1（不因 init.sql + SchemaInitializer 重复执行而重复插入）
+```
+
+### 三、幂等性验证
+
+```bash
+# 1. 多次重启后端
+docker-compose restart backend
+docker-compose restart backend
+docker-compose restart backend
+
+# 2. 检查表和权限数据
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SELECT COUNT(*) FROM sys_audit_log;"
+# 预期：0（空表，启动不会报错）
+
+docker exec user-manager-db mysql -uroot -proot -e "USE user_management; SELECT COUNT(*) FROM sys_permission WHERE code='audit:list';"
+# 预期：1（INSERT IGNORE 确保不重复）
+```
+
+---
+
+## 问题预防建议
+
+### 1. 新增模块的数据库变更必须通过应用层自动补齐
+
+任何需要新增数据库表、索引、权限数据的模块，都应在代码中实现自动 Schema 初始化，而**不能仅依赖 init.sql**。因为：
+
+| 场景 | init.sql 是否生效 | 应用层 SchemaInitializer 是否生效 |
+|------|------------------|-------------------------------|
+| 全新部署（无旧数据） | ✅ | ✅ |
+| 增量部署（已有数据） | ❌ | ✅ |
+| 本地开发（不用 Docker） | ❌ | ✅ |
+| 多环境部署 | 不确定 | ✅ |
+
+### 2. Schema 初始化组件模板
+
+每个新增模块的 Schema 变更，建议创建独立的初始化类：
+
+```java
+@Slf4j
+@Component
+public class XxxSchemaInitializer {
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public XxxSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void init() {
+        try {
+            // DDL: 使用 IF NOT EXISTS
+            jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS ...");
+            // DML: 使用 INSERT IGNORE 或 ON DUPLICATE KEY UPDATE
+            jdbcTemplate.update("INSERT IGNORE INTO ...");
+            log.info("Xxx 模块数据库初始化完成");
+        } catch (Exception e) {
+            log.error("Xxx 模块数据库初始化失败: {}", e.getMessage(), e);
+        }
+    }
+}
+```
+
+### 3. Docker Compose init.sql 的正确定位
+
+`init.sql` 的作用是**首次部署的全量初始化**，不是增量迁移工具。后续的 Schema 变更应通过：
+- 应用层 SchemaInitializer（本项目方案）
+- 或专业的数据库迁移工具（Flyway / Liquibase）
+
+### 4. 幂等性原则
+
+所有 Schema 初始化语句必须满足**幂等性**（多次执行结果一致）：
+
+| 操作 | 幂等写法 | 非幂等写法（禁止） |
+|------|---------|-----------------|
+| 建表 | `CREATE TABLE IF NOT EXISTS` | `CREATE TABLE` |
+| 插入数据 | `INSERT IGNORE` / `ON DUPLICATE KEY UPDATE` | `INSERT INTO` |
+| 加列 | 先 `INFORMATION_SCHEMA` 检查再加 | `ALTER TABLE ADD COLUMN`（重复报错） |
+| 加索引 | 先 `INFORMATION_SCHEMA` 检查再加 | `CREATE INDEX`（重复报错） |
