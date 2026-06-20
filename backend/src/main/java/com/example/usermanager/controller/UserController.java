@@ -17,7 +17,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -34,9 +33,6 @@ public class UserController {
 
     @Autowired
     private PermissionService permissionService;
-
-    @Autowired
-    private JwtUtils jwtUtils;
 
     @Autowired
     private PasswordEncoder passwordEncoder;

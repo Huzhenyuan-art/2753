@@ -1441,3 +1441,358 @@ docker exec user-manager-backend ls /app/uploads/avatars/
 | 多实例部署 | 各实例路径可能不同 ❌ | 固定路径 ✅ |
 
 **结论**：生产环境中的文件存储路径，应始终使用绝对路径。
+
+---
+
+# Maven 编译错误：找不到 JwtUtils 符号修复指南
+
+## 问题描述
+
+在 Docker 容器构建过程中，后端服务编译阶段出现 Maven 编译错误，具体表现为：
+
+```
+[ERROR] /app/src/main/java/com/example/usermanager/controller/UserController.java:[39,13]
+  找不到符号
+  符号:   类 JwtUtils
+  位置: 类 com.example.usermanager.controller.UserController
+```
+
+该错误导致 Maven 构建失败并返回退出代码 1，中断整个 Docker 镜像构建流程。
+
+---
+
+## 根因分析
+
+### 根本原因：字段声明与 import 语句不匹配
+
+在对 [UserController.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/controller/UserController.java) 进行 RBAC 改造时，进行了以下操作：
+
+1. **保留了字段声明**（第 39 行）：
+```java
+@Autowired
+private JwtUtils jwtUtils;
+```
+
+2. **但误删了 import 语句**（清理未使用 import 时过度清理）：
+```java
+// ❌ 被误删的 import
+import com.example.usermanager.util.JwtUtils;
+```
+
+3. **同时保留了另一个无用的 import**：
+```java
+// ❌ 未使用的 import
+import java.util.HashMap;
+```
+
+### 问题链条
+
+```
+重构 RBAC 代码
+    ↓
+清理"未使用"import（过度清理）
+    ↓
+删除了 JwtUtils 的 import
+    ↓
+但忘记删除 @Autowired private JwtUtils jwtUtils 字段
+    ↓
+（且该字段实际上在类中从未被使用）
+    ↓
+Maven 编译：找不到 JwtUtils 类符号
+    ↓
+BUILD FAILURE，Docker 镜像构建终止
+```
+
+### 为什么 IDE 本地没有报错？
+
+- IDE 的诊断（如 `GetDiagnostics`）可能未对未导入的类做严格校验，或缓存状态不一致
+- 但 Maven 是严格的全量编译，任何未解析符号都会直接构建失败
+- **关键教训**：IDE 诊断只能作为辅助，最终必须以 `mvn clean compile` 结果为准
+
+---
+
+## 修复方案
+
+采用 **最小改动原则**，做两处清理即可彻底解决问题：
+
+### 改动一：删除未使用的字段（而非补 import）
+
+因为 `jwtUtils` 字段在整个类中从未被实际使用（登录和 JWT 解析已由 UserService 和 JwtAuthenticationFilter 处理），最合理的做法是**删除该字段**：
+
+```java
+// UserController.java - 删除以下 3 行
+@Autowired
+private PermissionService permissionService;
+
+@Autowired
+private JwtUtils jwtUtils;              // ← 删除此行
+
+@Autowired
+private PasswordEncoder passwordEncoder;
+```
+
+**为什么不补 import？**：
+- 如果该字段确实需要使用，才应该补 import
+- 当前代码完全不需要在 Controller 层直接操作 JwtUtils，Service 层已封装完成
+- 删除无用字段能让代码更干净，避免后续再次出现"字段存在但未使用"的告警
+
+### 改动二：删除未使用的 HashMap import
+
+```java
+// 删除 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+```
+
+### 修复后的 UserController 结构
+
+```java
+package com.example.usermanager.controller;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.usermanager.common.Result;
+import com.example.usermanager.dto.LoginUserDTO;
+import com.example.usermanager.entity.Permission;
+import com.example.usermanager.entity.Role;
+import com.example.usermanager.entity.User;
+import com.example.usermanager.service.PermissionService;
+import com.example.usermanager.service.RoleService;
+import com.example.usermanager.service.UserService;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@RestController
+@RequestMapping("/api/user")
+public class UserController {
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private RoleService roleService;
+
+    @Autowired
+    private PermissionService permissionService;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    // ... 方法体保持不变
+}
+```
+
+---
+
+## 依赖配置检查（pom.xml）
+
+虽然本次问题与依赖无关，但作为标准检查流程，确认 JJWT 依赖声明正确：
+
+[pom.xml](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/pom.xml) 中的 JJWT 配置：
+
+```xml
+<properties>
+    <jjwt.version>0.12.3</jjwt.version>
+</properties>
+
+<dependencies>
+    <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-api</artifactId>
+        <version>${jjwt.version}</version>
+    </dependency>
+    <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-impl</artifactId>
+        <version>${jjwt.version}</version>
+        <scope>runtime</scope>
+    </dependency>
+    <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-jackson</artifactId>
+        <version>${jjwt.version}</version>
+        <scope>runtime</scope>
+    </dependency>
+</dependencies>
+```
+
+**说明**：
+- `jjwt-api`：编译期 API，`scope` 为默认 compile
+- `jjwt-impl` 和 `jjwt-jackson`：运行时实现，`scope=runtime` 是正确配置
+- 版本统一使用 `${jjwt.version}` 变量管理，便于升级
+
+依赖配置无误，本次问题与 pom.xml 无关。
+
+---
+
+## 本次修复涉及文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| [UserController.java](file:///d:/Desktop/新建文件夹%20(2)/label-2753/2753/backend/src/main/java/com/example/usermanager/controller/UserController.java) | 删除 `@Autowired private JwtUtils jwtUtils;` 字段（未使用）；删除未使用的 `import java.util.HashMap;` |
+
+---
+
+## 验证方法
+
+### 一、本地 Maven 编译验证（推荐）
+
+```bash
+cd backend
+
+# 1. 全量清理并编译
+mvn clean compile -q
+# 预期：BUILD SUCCESS，无任何错误输出
+
+# 2. 或查看详细输出
+mvn clean compile
+# 预期：末行显示 "BUILD SUCCESS"，无 ERROR 级别日志
+
+# 3. 打包验证（模拟 Docker 构建）
+mvn clean package -DskipTests -q
+# 预期：BUILD SUCCESS，target 目录下生成 user-manager-0.0.1-SNAPSHOT.jar
+```
+
+### 二、IDE 诊断验证
+
+在 IDE 中执行 `GetDiagnostics`，确认返回空数组 `[]`，表示无编译错误。
+
+### 三、Docker 全链路构建验证
+
+```bash
+# 1. 清理旧容器和镜像
+docker-compose down -v
+docker rmi user-manager-backend user-manager-frontend 2>/dev/null
+
+# 2. 重新构建所有镜像
+docker-compose build --no-cache
+
+# 关键观察：
+#   Step X/XX : RUN mvn clean package -DskipTests
+#   预期：该步骤成功完成，不出现 "cannot find symbol" 等编译错误
+
+# 3. 启动并验证服务
+docker-compose up -d
+
+# 4. 验证后端健康状态
+docker-compose ps
+# 预期：backend 容器状态为 Up (healthy)
+
+# 5. 端到端功能验证
+curl -X POST http://localhost:32753/api/user/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
+# 预期：code=200，返回包含 token、roles、permissions 的完整用户信息
+```
+
+### 四、回归测试清单
+
+| 测试项 | 预期结果 |
+|--------|---------|
+| `mvn clean compile` | BUILD SUCCESS |
+| `mvn clean package -DskipTests` | BUILD SUCCESS，target 目录有 JAR |
+| Docker build backend | 构建成功，无编译错误 |
+| docker-compose up -d | 所有容器 healthy |
+| 登录接口正常 | 返回 token、角色、权限 |
+| 用户列表接口正常 | 返回分页数据 |
+| JWT 中包含角色和权限 | 解析 token 可见 roles 和 permissions 字段 |
+
+---
+
+## 问题预防建议
+
+### 1. Java import 清理四步法（避免过度清理）
+
+每次清理 import 时，按以下步骤逐一验证：
+
+```
+Step 1: 识别"未使用"的 import
+        ↓
+Step 2: 检查该类是否作为字段类型使用（如 private Xxx xxx;）
+        ↓ 是
+        → import 被使用，保留
+        ↓ 否
+Step 3: 检查是否作为方法参数/返回值/泛型类型/注解使用
+        ↓ 是
+        → import 被使用，保留
+        ↓ 否
+Step 4: 确认可以安全删除
+```
+
+### 2. 删除 import 时必须联动检查字段声明
+
+**黄金规则**：删除某个类的 import 前，先全局搜索该类名在当前文件中的所有出现位置。
+
+```bash
+# 示例：在删除 import com.example.usermanager.util.JwtUtils 之前
+# 先在 UserController.java 中搜索 JwtUtils
+grep -n "JwtUtils" UserController.java
+
+# 如果有以下任意一种出现，就不能删除 import：
+#   private JwtUtils jwtUtils;          ← 字段
+#   public JwtUtils getJwtUtils() { }   ← 方法签名
+#   List<JwtUtils> list;                ← 泛型
+```
+
+### 3. CI/CD 流水线必须包含 Maven 编译门禁
+
+任何代码合并到主分支前，必须通过 `mvn clean compile` 构建。推荐的 CI 脚本：
+
+```yaml
+# .github/workflows/backend-ci.yml 示例
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Maven Compile
+        run: cd backend && mvn clean compile -q
+      - name: Maven Package
+        run: cd backend && mvn clean package -DskipTests -q
+```
+
+**效果**：IDE 诊断漏过的编译错误，在 CI 阶段 100% 被提前拦截。
+
+### 4. 提交前本地自查清单
+
+每次提交代码前，执行以下最小检查：
+
+| # | 检查项 | 命令 |
+|---|--------|------|
+| 1 | Java 编译 | `cd backend && mvn clean compile -q` |
+| 2 | 前端类型 | `cd frontend && npm run type-check` |
+| 3 | 未使用 import | IDE 自动优化 import 功能 |
+| 4 | 未使用字段 | IDE 告警检查（灰色字段名） |
+
+### 5. 优先删除未使用的字段，而非保留"可能将来用"
+
+- **未使用的字段是技术债务**：增加代码量、误导维护者、可能引发编译错误
+- **YAGNI 原则**（You Aren't Gonna Need It）：不要为"将来可能会用"保留代码
+- 如果将来确实需要，从 Git 历史中恢复比维护无用代码成本更低
+
+---
+
+## 总结：本次问题的核心教训
+
+| 教训 | 说明 |
+|------|------|
+| **IDE 诊断 ≠ Maven 编译** | IDE 可能漏报，最终必须以 `mvn clean compile` 为准 |
+| **删除 import 前先搜索类名** | 确认该类在文件中真的没有任何使用 |
+| **无用字段尽早删除** | 比保留"将来可能用"更安全、更干净 |
+| **CI 必须有编译门禁** | 不让任何编译错误流入主分支 |
+| **最小改动原则** | 能删字段就不补 import，优先精简代码 |
+
+通过以上预防措施，可以在编码阶段和 CI 阶段双层拦截此类问题，避免影响 Docker 构建和部署流程。
