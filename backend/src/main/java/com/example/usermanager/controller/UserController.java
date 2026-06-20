@@ -101,7 +101,9 @@ public class UserController {
                                  @RequestParam(defaultValue = "10") Integer pageSize,
                                  @RequestParam(required = false) String username,
                                  @RequestParam(required = false) Integer status,
-                                 @RequestParam(required = false) Long deptId) {
+                                 @RequestParam(required = false) Long deptId,
+                                 @RequestParam(required = false) String sortField,
+                                 @RequestParam(required = false) String sortOrder) {
         Page<User> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         if (StringUtils.hasText(username)) {
@@ -110,7 +112,28 @@ public class UserController {
         if (status != null) {
             wrapper.eq(User::getStatus, status);
         }
-        wrapper.orderByDesc(User::getCreateTime);
+        boolean sortApplied = false;
+        if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
+            boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
+            if ("username".equals(sortField)) {
+                if (isAsc) {
+                    wrapper.orderByAsc(User::getUsername);
+                } else {
+                    wrapper.orderByDesc(User::getUsername);
+                }
+                sortApplied = true;
+            } else if ("createTime".equals(sortField)) {
+                if (isAsc) {
+                    wrapper.orderByAsc(User::getCreateTime);
+                } else {
+                    wrapper.orderByDesc(User::getCreateTime);
+                }
+                sortApplied = true;
+            }
+        }
+        if (!sortApplied) {
+            wrapper.orderByDesc(User::getCreateTime);
+        }
         return Result.success(userService.pageWithDept(page, wrapper, deptId));
     }
 

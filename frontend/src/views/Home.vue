@@ -128,13 +128,15 @@
             style="width: 100%" 
             class="custom-table"
             :header-cell-style="{ background: '#f8fafc', color: '#64748b', fontWeight: 'bold' }"
+            @sort-change="handleSortChange"
+            :default-sort="{ prop: sortField, order: sortOrder }"
           >
             <el-table-column label="头像" width="70" align="center">
               <template #default="{ row }">
                 <el-avatar :size="36" :src="resolveAvatarUrl(row.avatar)" />
               </template>
             </el-table-column>
-            <el-table-column prop="username" label="用户名" min-width="120">
+            <el-table-column prop="username" label="用户名" min-width="120" sortable="custom">
               <template #default="{ row }">
                 <span class="user-identity">{{ row.username }}</span>
               </template>
@@ -164,7 +166,7 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="入职时间" width="180">
+            <el-table-column prop="createTime" label="入职时间" width="180" sortable="custom">
               <template #default="{ row }">
                 <span class="time-stamp">{{ formatDate(row.createTime) }}</span>
               </template>
@@ -547,6 +549,8 @@ const pageSize = ref(getSavedPageSize())
 const searchQuery = ref('')
 const statusFilter = ref<number | undefined>(undefined)
 const loading = ref(false)
+const sortField = ref('createTime')
+const sortOrder = ref('descending')
 
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
@@ -807,6 +811,15 @@ const handleDeptNodeClick = (data: any) => {
   fetchData()
 }
 
+const handleSortChange = ({ prop, order }: { prop: string; order: string | null }) => {
+  if (prop && order) {
+    sortField.value = prop
+    sortOrder.value = order
+    pageNum.value = 1
+    fetchData()
+  }
+}
+
 const fetchData = async () => {
   loading.value = true
   try {
@@ -820,6 +833,10 @@ const fetchData = async () => {
     }
     if (deptFilter.value !== undefined) {
       params.deptId = deptFilter.value
+    }
+    if (sortField.value && sortOrder.value) {
+      params.sortField = sortField.value
+      params.sortOrder = sortOrder.value === 'ascending' ? 'asc' : 'desc'
     }
     const res: any = await request.get('/user/list', { params })
     const list = res.data.records || []
