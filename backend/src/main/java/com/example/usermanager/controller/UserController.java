@@ -176,4 +176,16 @@ public class UserController {
         userService.assignRoles(id, roleIds);
         return Result.success("角色分配成功");
     }
+
+    @GetMapping("/check-username")
+    public Result<Boolean> checkUsername(@RequestParam String username,
+                                         @RequestParam(required = false) Long excludeId) {
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(User::getUsername, username);
+        if (excludeId != null) {
+            wrapper.ne(User::getId, excludeId);
+        }
+        long count = userService.count(wrapper);
+        return Result.success(count == 0);
+    }
 }

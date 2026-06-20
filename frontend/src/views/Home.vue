@@ -195,7 +195,27 @@
           </div>
         </el-form-item>
         <el-form-item label="用户名" prop="username">
-          <el-input v-model="userForm.username" :disabled="!!userForm.id" placeholder="登录使用的唯一账号" />
+          <el-input 
+            v-model="userForm.username" 
+            :disabled="!!userForm.id" 
+            placeholder="登录使用的唯一账号"
+            @blur="onUsernameBlur"
+          >
+            <template #suffix>
+              <span v-if="usernameCheckStatus === 'checking'" class="username-check-indicator">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                <span class="check-text checking">检查中...</span>
+              </span>
+              <span v-else-if="usernameCheckStatus === 'available'" class="username-check-indicator">
+                <el-icon color="#10b981"><CircleCheckFilled /></el-icon>
+                <span class="check-text available">用户名可用</span>
+              </span>
+              <span v-else-if="usernameCheckStatus === 'unavailable'" class="username-check-indicator">
+                <el-icon color="#ef4444"><CircleCloseFilled /></el-icon>
+                <span class="check-text unavailable">用户名已被占用</span>
+              </span>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="登录密码" prop="password" :rules="userForm.id ? [] : userRules.password">
           <el-input v-model="userForm.password" type="password" show-password placeholder="长度需在 6-20 位之间" />
@@ -249,7 +269,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Notebook } from '@element-plus/icons-vue'
+import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 
@@ -321,6 +341,80 @@ const userForm = ref<any>({
 const avatarPreview = ref('')
 const avatarFile = ref<File | null>(null)
 
+type UsernameCheckStatus = 'idle' | 'checking' | 'available' | 'unavailable'
+const usernameCheckStatus = ref<UsernameCheckStatus>('idle')
+let usernameDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let usernameCheckAbortController: AbortController | null = null
+
+const checkUsernameAvailable = async (username: string, excludeId?: number): Promise<boolean> => {
+  if (usernameCheckAbortController) {
+    usernameCheckAbortController.abort()
+  }
+  usernameCheckAbortController = new AbortController()
+  try {
+    const params: any = { username }
+    if (excludeId) {
+      params.excludeId = excludeId
+    }
+    const res: any = await request.get('/user/check-username', {
+      params,
+      signal: usernameCheckAbortController.signal,
+      skipErrorToast: true
+    } as any)
+    return !!res.data
+  } catch (e: any) {
+    if (e.name === 'AbortError' || e.code === 'ERR_CANCELED' || e.code === 'ECONNABORTED') {
+      throw e
+    }
+    return true
+  }
+}
+
+const debouncedCheckUsername = (username: string, excludeId?: number) => {
+  if (usernameDebounceTimer) {
+    clearTimeout(usernameDebounceTimer)
+  }
+  if (!username) {
+    usernameCheckStatus.value = 'idle'
+    return
+  }
+  usernameCheckStatus.value = 'checking'
+  usernameDebounceTimer = setTimeout(async () => {
+    try {
+      const available = await checkUsernameAvailable(username, excludeId)
+      usernameCheckStatus.value = available ? 'available' : 'unavailable'
+    } catch (e: any) {
+      if (e.name === 'AbortError' || e.code === 'ERR_CANCELED') {
+        return
+      }
+      usernameCheckStatus.value = 'idle'
+    }
+  }, 500)
+}
+
+const onUsernameBlur = () => {
+  if (userForm.value.id) return
+  const username = userForm.value.username?.trim()
+  if (!username) return
+  if (usernameCheckStatus.value !== 'checking') {
+    usernameCheckStatus.value = 'checking'
+  }
+  if (usernameDebounceTimer) {
+    clearTimeout(usernameDebounceTimer)
+  }
+  ;(async () => {
+    try {
+      const available = await checkUsernameAvailable(username, userForm.value.id)
+      usernameCheckStatus.value = available ? 'available' : 'unavailable'
+    } catch (e: any) {
+      if (e.name === 'AbortError' || e.code === 'ERR_CANCELED') {
+        return
+      }
+      usernameCheckStatus.value = 'idle'
+    }
+  })()
+}
+
 const passwordStrength = computed(() => {
   const pwd = userForm.value.password || ''
   let score = 0
@@ -346,8 +440,43 @@ const validateConfirmPassword = (_rule: any, value: string, callback: any) => {
   }
 }
 
+const validateUsername = async (_rule: any, value: string, callback: any) => {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    callback(new Error('请输入用户名'))
+    return
+  }
+  if (userForm.value.id) {
+    callback()
+    return
+  }
+  try {
+    if (usernameCheckStatus.value === 'checking') {
+      const available = await checkUsernameAvailable(trimmed, userForm.value.id)
+      usernameCheckStatus.value = available ? 'available' : 'unavailable'
+      if (!available) {
+        callback(new Error('用户名已被占用，请更换'))
+        return
+      }
+    } else if (usernameCheckStatus.value === 'unavailable') {
+      callback(new Error('用户名已被占用，请更换'))
+      return
+    }
+    callback()
+  } catch (e: any) {
+    if (e.name === 'AbortError' || e.code === 'ERR_CANCELED') {
+      callback(new Error('请等待校验完成'))
+    } else {
+      callback()
+    }
+  }
+}
+
 const userRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { validator: validateUsername, trigger: 'blur' }
+  ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 6, max: 20, message: '密码长度在 6 到 20 个字符', trigger: 'blur' }
@@ -415,6 +544,11 @@ const handleAdd = () => {
   userForm.value = { id: undefined, username: '', password: '', confirmPassword: '', nickname: '', email: '', avatar: '', status: 1, roleIds: [] }
   avatarPreview.value = ''
   avatarFile.value = null
+  usernameCheckStatus.value = 'idle'
+  if (usernameDebounceTimer) {
+    clearTimeout(usernameDebounceTimer)
+    usernameDebounceTimer = null
+  }
   dialogVisible.value = true
 }
 
@@ -456,6 +590,11 @@ const handleEdit = async (row: any) => {
   userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
   avatarPreview.value = ''
   avatarFile.value = null
+  usernameCheckStatus.value = 'idle'
+  if (usernameDebounceTimer) {
+    clearTimeout(usernameDebounceTimer)
+    usernameDebounceTimer = null
+  }
   dialogVisible.value = true
 }
 
@@ -463,6 +602,11 @@ watch(() => userForm.value.password, () => {
   if (userForm.value.confirmPassword) {
     userFormRef.value?.validateField('confirmPassword')
   }
+})
+
+watch(() => userForm.value.username, (newVal) => {
+  if (userForm.value.id) return
+  debouncedCheckUsername(newVal?.trim(), userForm.value.id)
 })
 
 const handleAssignRole = async (row: any) => {
@@ -475,6 +619,11 @@ const handleAssignRole = async (row: any) => {
   userForm.value = { ...row, password: '', confirmPassword: '', roleIds }
   avatarPreview.value = ''
   avatarFile.value = null
+  usernameCheckStatus.value = 'idle'
+  if (usernameDebounceTimer) {
+    clearTimeout(usernameDebounceTimer)
+    usernameDebounceTimer = null
+  }
   dialogVisible.value = true
 }
 
@@ -879,5 +1028,29 @@ onMounted(async () => {
 
 .strength-text.very-strong {
   color: #059669;
+}
+
+.username-check-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.check-text {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.check-text.checking {
+  color: #64748b;
+}
+
+.check-text.available {
+  color: #10b981;
+}
+
+.check-text.unavailable {
+  color: #ef4444;
 }
 </style>
