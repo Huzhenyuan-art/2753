@@ -160,11 +160,13 @@
           <div class="pagination-footer">
             <el-pagination
               background
-              layout="total, prev, pager, next"
+              layout="total, sizes, prev, pager, next"
+              :page-sizes="[10, 20, 50, 100]"
               :total="total"
               v-model:current-page="pageNum"
               v-model:page-size="pageSize"
               @current-change="fetchData"
+              @size-change="handleSizeChange"
             />
           </div>
         </div>
@@ -324,7 +326,18 @@ const allRoles = ref<RoleOption[]>([])
 const userList = ref<any[]>([])
 const total = ref(0)
 const pageNum = ref(1)
-const pageSize = ref(10)
+const PAGE_SIZE_KEY = 'user_list_page_size'
+const getSavedPageSize = (): number => {
+  const saved = localStorage.getItem(PAGE_SIZE_KEY)
+  if (saved) {
+    const size = parseInt(saved, 10)
+    if ([10, 20, 50, 100].includes(size)) {
+      return size
+    }
+  }
+  return 10
+}
+const pageSize = ref(getSavedPageSize())
 const searchQuery = ref('')
 const statusFilter = ref<number | undefined>(undefined)
 const loading = ref(false)
@@ -557,6 +570,12 @@ const fetchData = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleSizeChange = (size: number) => {
+  localStorage.setItem(PAGE_SIZE_KEY, String(size))
+  pageNum.value = 1
+  fetchData()
 }
 
 const handleAdd = () => {
