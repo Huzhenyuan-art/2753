@@ -322,3 +322,218 @@ npm run build
 - [Vite 环境变量与模式](https://cn.vitejs.dev/guide/env-and-mode.html)
 - [Vite 客户端类型](https://cn.vitejs.dev/guide/features.html#client-types)
 - [TypeScript - Exporting types](https://www.typescriptlang.org/docs/handbook/2/modules.html#type-only-exports-and-imports)
+
+---
+
+## 四、Docker 数据库容器启动失败修复
+
+### 问题描述
+
+在 Docker 环境执行 `docker compose up -d` 启动容器时，`2753-db`（db 依赖容器）持续处于 `Restarting (1)` 状态，无法正常运行。后端和前端容器也因依赖 db 健康检查而无法启动。
+
+### 错误现象
+
+```bash
+$ docker ps -a
+CONTAINER ID   IMAGE        STATUS                          NAMES
+fe07e7029317   mysql:8.0    Restarting (1) 23 seconds ago   2753-db
+```
+
+```bash
+$ docker logs 2753-db
+[ERROR] [Entrypoint]: Database is uninitialized and password option is not specified
+    You need to specify one of the following as an environment variable:
+    - MYSQL_ROOT_PASSWORD
+    - MYSQL_ALLOW_EMPTY_PASSWORD
+    - MYSQL_RANDOM_ROOT_PASSWORD
+```
+
+---
+
+### 根因分析
+
+MySQL 官方镜像（mysql:8.0）在**首次初始化**（空数据目录）时，**强制要求**必须指定以下三个环境变量之一来确定 root 密码策略：
+
+| 变量 | 含义 |
+|---|---|
+| `MYSQL_ROOT_PASSWORD` | 设置固定的 root 密码（推荐） |
+| `MYSQL_ALLOW_EMPTY_PASSWORD` | 允许 root 密码为空（不推荐） |
+| `MYSQL_RANDOM_ROOT_PASSWORD` | 随机生成 root 密码并打印到日志 |
+
+**本项目问题**：
+
+1. **缺少 `.env` 文件**：项目根目录没有提供任何环境变量文件，导致所有 `${VAR}` 替换为空字符串
+2. **`docker-compose.yml` 缺少默认值兜底**：与 `docker-compose.dev.yml` 对比，生产环境 compose 文件中多个关键变量未设置 `:-默认值` 语法：
+
+| 环境变量 | docker-compose.yml（修复前） | docker-compose.dev.yml | 问题 |
+|---|---|---|---|
+| `MYSQL_ROOT_PASSWORD` | `${MYSQL_ROOT_PASSWORD}`（无默认） | `${MYSQL_ROOT_PASSWORD:-root}` | ❌ 空值导致 MySQL 拒绝启动 |
+| `healthcheck` 中的密码 | `-p${MYSQL_ROOT_PASSWORD}`（无默认） | `-p${MYSQL_ROOT_PASSWORD:-root}` | ❌ 即使启动也无法通过健康检查 |
+| `SPRING_DATASOURCE_URL` | `${SPRING_DATASOURCE_URL}`（无默认） | 写死完整 JDBC URL | ❌ 后端无法连接数据库 |
+| `SPRING_DATASOURCE_PASSWORD` | `${SPRING_DATASOURCE_PASSWORD}`（无默认） | `${MYSQL_ROOT_PASSWORD:-root}` | ❌ 后端认证失败 |
+| `JWT_SECRET` | `${JWT_SECRET}`（无默认） | 有默认值 | ❌ JWT 签名密钥为空存在安全隐患 |
+
+3. **残留的损坏数据卷**：之前多次尝试启动失败，`2753_mysql_data` 数据卷中留下了不完整的初始化目录（ibdata1 等文件已创建但未完成），即使后续修复环境变量，复用该卷也会导致不一致状态。
+
+---
+
+### 修复方案（三步走）
+
+#### 步骤 1：清理损坏状态（强制重新初始化）
+
+```bash
+# 1. 停止并删除失败重启的容器
+docker stop 2753-db
+docker rm 2753-db
+
+# 2. 删除损坏的 MySQL 数据卷（非空目录会跳过初始化）
+docker volume rm 2753_mysql_data
+```
+
+> **关键说明**：MySQL 官方镜像的 entrypoint 脚本仅在 `/var/lib/mysql` **为空目录**时才执行初始化（执行 `/docker-entrypoint-initdb.d/*.sql`）。若该目录已存在文件（哪怕是不完整的），则直接跳初始化尝试启动，此时若之前未设置密码则 root 用户不存在，依然会失败。因此必须删除数据卷以保证**干净的首次初始化**。
+
+#### 步骤 2：创建项目根目录 `.env` 文件
+
+新增 [.env](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/.env)，完整声明所有 compose 引用的变量：
+
+```dotenv
+COMPOSE_PROJECT_NAME=2753
+
+# MySQL
+MYSQL_ROOT_PASSWORD=root
+MYSQL_DATABASE=user_management
+MYSQL_PUBLISH_PORT=12753
+MYSQL_CHARSET=utf8mb4
+MYSQL_COLLATION=utf8mb4_unicode_ci
+
+# Backend
+SPRING_PROFILES_ACTIVE=production
+SPRING_DATASOURCE_URL=jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+SPRING_DATASOURCE_USERNAME=root
+SPRING_DATASOURCE_PASSWORD=root
+JWT_SECRET=change_this_secret_key_in_production_please_use_a_long_random_string
+JWT_ACCESS_EXPIRATION=3600000
+JWT_REFRESH_EXPIRATION=604800000
+BACKEND_PUBLISH_PORT=22753
+FILE_UPLOAD_DIR=/app/uploads/avatars
+
+# Frontend
+VITE_API_BASE_URL=/api
+FRONTEND_PUBLISH_PORT=32753
+
+# Timezone
+TZ=Asia/Shanghai
+```
+
+> **安全提示**：生产环境部署前务必修改 `JWT_SECRET` 为足够长的随机字符串（建议 64+ 字符），`MYSQL_ROOT_PASSWORD` 也建议改为强密码。
+
+#### 步骤 3：修复 `docker-compose.yml` 默认值兜底（双保险）
+
+即使 `.env` 缺失，也应确保 compose 文件能通过默认值正常启动。在 [docker-compose.yml](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/docker-compose.yml) 中为以下 5 个变量添加 `:-默认值`：
+
+```diff
+ services:
+   db:
+     environment:
+-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
++      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+       ...
+     healthcheck:
+-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
++      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+
+   backend:
+     environment:
+-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
++      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+-      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
++      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-root}
+-      JWT_SECRET: ${JWT_SECRET}
++      JWT_SECRET: ${JWT_SECRET:-change_this_jwt_secret_in_production}
+```
+
+---
+
+### 验证结果
+
+执行以下命令验证 db 容器已完全恢复：
+
+```bash
+# 单独启动 db 服务（依赖最小）
+docker compose up -d db
+```
+
+**1. 容器状态验证：**
+
+```bash
+$ docker ps -a --filter name=2753-db
+CONTAINER ID   IMAGE       STATUS                    PORTS                                           NAMES
+d78fff44a067   mysql:8.0   Up 42 seconds (healthy)   0.0.0.0:12753->3306/tcp, [::]:12753->3306/tcp   2753-db
+```
+
+✅ `STATUS` 显示 `(healthy)` — 健康检查通过  
+✅ `PORTS` 显示 12753 → 3306 端口映射正常
+
+**2. 数据库内容验证（通过容器内 mysql 客户端）：**
+
+```bash
+docker exec 2753-db mysql -uroot -proot -e "
+  SHOW DATABASES;
+  USE user_management;
+  SHOW TABLES;
+  SELECT id, username, nickname FROM sys_user;
+"
+```
+
+预期输出：
+- `user_management` 数据库存在
+- 8 张业务表全部创建：`sys_user`、`sys_role`、`sys_permission`、`sys_user_role`、`sys_role_permission`、`sys_dept`、`sys_user_dept`、`sys_audit_log`
+- `sys_user` 表包含 3 条种子数据：`admin`、`zhangsan`、`lisi`
+
+**3. 端口连通性验证（宿主主机）：**
+
+```bash
+# Windows PowerShell
+Test-NetConnection -ComputerName 127.0.0.1 -Port 12753
+# 或使用 MySQL 客户端
+mysql -h 127.0.0.1 -P 12753 -uroot -proot -e "SELECT 1;"
+```
+
+---
+
+### 影响的文件
+
+| 文件 | 变更类型 | 说明 |
+|---|---|---|
+| [.env](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/.env) | 新增 | 项目根目录环境变量配置（所有 compose 变量值） |
+| [docker-compose.yml](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/docker-compose.yml) | 修改 | 5 处环境变量添加 `:-默认值` 兜底 |
+
+**操作记录（容器/数据卷）：**
+- 删除旧容器 `2753-db`（Restarting 状态）
+- 删除数据卷 `2753_mysql_data`（损坏的初始化目录）
+- 重新创建并启动 `2753-db` 容器（全新数据卷 + 完整初始化）
+
+---
+
+### 常见问题排查清单
+
+若后续再次遇到 MySQL 容器启动问题，按以下优先级排查：
+
+| 序号 | 检查项 | 命令/方法 | 预期结果 |
+|---|---|---|---|
+| 1 | `.env` 文件是否存在 | `Test-Path .env`（PS）或 `ls .env` | 存在且可读 |
+| 2 | `MYSQL_ROOT_PASSWORD` 是否已设置 | `docker compose config \| Select-String MYSQL_ROOT_PASSWORD` | 值非空 |
+| 3 | 数据卷是否为全新空卷 | `docker volume inspect 2753_mysql_data` 后查看挂载目录 | 空或仅含初始化后内容 |
+| 4 | 容器日志有无 ERROR | `docker logs 2753-db \| Select-String ERROR` | 无匹配 |
+| 5 | 健康检查状态 | `docker inspect 2753-db \| Select-String Health` | 显示 `healthy` |
+| 6 | init.sql 是否被执行 | 检查 `docker-entrypoint-initdb.d` 挂载 | 容器内 `/docker-entrypoint-initdb.d/init.sql` 存在 |
+
+---
+
+### 相关参考
+
+- [MySQL Docker Official Image - Environment Variables](https://hub.docker.com/_/mysql#environment-variables)
+- [Docker Compose - Variable Substitution（`${VAR:-default}` 语法）](https://docs.docker.com/compose/compose-file/12-interpolation/)
+- [Docker Compose - Environment File (.env)](https://docs.docker.com/compose/environment-variables/set-environment-variables/)
+- [MySQL 8.0 - Server Command Options](https://dev.mysql.com/doc/refman/8.0/en/server-options.html)
+
