@@ -19,6 +19,8 @@ import com.example.usermanager.entity.Role;
 import com.example.usermanager.entity.User;
 import com.example.usermanager.entity.UserDept;
 import com.example.usermanager.entity.UserRole;
+import com.example.usermanager.exception.BusinessException;
+import com.example.usermanager.exception.ErrorCode;
 import com.example.usermanager.mapper.UserDeptMapper;
 import com.example.usermanager.mapper.UserMapper;
 import com.example.usermanager.mapper.UserRoleMapper;
@@ -77,137 +79,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Autowired
     private UserRoleMapper userRoleMapper;
 
-    @Override
-    public LoginUserDTO login(String username, String password) {
-        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-        if (user == null) {
-            throw new RuntimeException("USER_NOT_FOUND");
-        }
-        if (!passwordEncoder.matches(password, user.getPassword())) {
-            throw new RuntimeException("PASSWORD_ERROR");
-        }
-        if (user.getStatus() != null && user.getStatus() == 0) {
-            throw new RuntimeException("ACCOUNT_DISABLED");
-        }
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(
+            "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
 
-        List<Role> roles = roleService.getRolesByUserId(user.getId());
-        List<Permission> permissions = permissionService.getPermissionsByUserId(user.getId());
-
-        List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
-        List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
-
-        String accessToken = jwtUtils.generateAccessToken(username, user.getId(), roleCodes, permissionCodes);
-        String refreshToken = jwtUtils.generateRefreshToken(username, user.getId());
-
-        LoginUserDTO dto = new LoginUserDTO();
-        dto.setToken(accessToken);
-        dto.setRefreshToken(refreshToken);
-        dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
-        dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
-        dto.setUserId(user.getId());
-        dto.setUsername(user.getUsername());
-        dto.setNickname(user.getNickname());
-        dto.setEmail(user.getEmail());
-        dto.setAvatar(user.getAvatar());
-        dto.setStatus(user.getStatus());
-        dto.setCreateTime(user.getCreateTime());
-        dto.setUpdateTime(user.getUpdateTime());
-        dto.setRoles(roles);
-        dto.setPermissions(permissions);
-        dto.setRoleCodes(roleCodes);
-        dto.setPermissionCodes(permissionCodes);
-
-        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
-        dto.setDepts(depts);
-
-        return dto;
-    }
-
-    @Override
-    public RefreshTokenDTO refreshToken(String refreshToken) {
-        if (refreshToken == null || refreshToken.trim().isEmpty()) {
-            throw new RuntimeException("REFRESH_TOKEN_MISSING");
-        }
-
-        if (!jwtUtils.validateToken(refreshToken)) {
-            throw new RuntimeException("REFRESH_TOKEN_INVALID");
-        }
-
-        if (!jwtUtils.isRefreshToken(refreshToken)) {
-            throw new RuntimeException("REFRESH_TOKEN_TYPE_ERROR");
-        }
-
-        String username = jwtUtils.getUsernameFromToken(refreshToken);
-        Long userId = jwtUtils.getUserIdFromToken(refreshToken);
-
-        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-        if (user == null) {
-            throw new RuntimeException("USER_NOT_FOUND");
-        }
-        if (user.getStatus() != null && user.getStatus() == 0) {
-            throw new RuntimeException("ACCOUNT_DISABLED");
-        }
-        if (!user.getId().equals(userId)) {
-            throw new RuntimeException("REFRESH_TOKEN_INVALID");
-        }
-
-        if (user.getPasswordChangedAt() != null) {
-            java.time.LocalDateTime passwordChangedAt = user.getPasswordChangedAt();
-            java.util.Date tokenIssuedAt = jwtUtils.parseClaims(refreshToken).getIssuedAt();
-            if (tokenIssuedAt != null) {
-                java.time.LocalDateTime tokenIssuedDateTime = tokenIssuedAt.toInstant()
-                        .atZone(java.time.ZoneId.systemDefault()).toLocalDateTime();
-                if (tokenIssuedDateTime.isBefore(passwordChangedAt)) {
-                    throw new RuntimeException("PASSWORD_CHANGED");
-                }
-            }
-        }
-
-        List<Role> roles = roleService.getRolesByUserId(user.getId());
-        List<Permission> permissions = permissionService.getPermissionsByUserId(user.getId());
-        List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
-        List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
-
-        String newAccessToken = jwtUtils.generateAccessToken(username, user.getId(), roleCodes, permissionCodes);
-        String newRefreshToken = jwtUtils.generateRefreshToken(username, user.getId());
-
-        RefreshTokenDTO dto = new RefreshTokenDTO();
-        dto.setToken(newAccessToken);
-        dto.setRefreshToken(newRefreshToken);
-        dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
-        dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
-
-        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
-        dto.setDepts(depts);
-
-        return dto;
-    }
-
-    @Override
-    public void changePassword(String username, ChangePasswordDTO dto) {
-        if (!dto.getNewPassword().equals(dto.getConfirmPassword())) {
-            throw new RuntimeException("CONFIRM_PASSWORD_MISMATCH");
-        }
-        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-        if (user == null) {
-            throw new RuntimeException("USER_NOT_FOUND");
-        }
-        if (!passwordEncoder.matches(dto.getOldPassword(), user.getPassword())) {
-            throw new RuntimeException("OLD_PASSWORD_ERROR");
-        }
-        if (passwordEncoder.matches(dto.getNewPassword(), user.getPassword())) {
-            throw new RuntimeException("SAME_AS_OLD_PASSWORD");
-        }
-        if (WEAK_PASSWORDS.contains(dto.getNewPassword().toLowerCase())) {
-            throw new RuntimeException("WEAK_PASSWORD");
-        }
-        if (countPasswordComplexity(dto.getNewPassword()) < 2) {
-            throw new RuntimeException("INSUFFICIENT_COMPLEXITY");
-        }
-        user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
-        user.setPasswordChangedAt(LocalDateTime.now());
-        this.updateById(user);
-    }
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private static final Set<String> WEAK_PASSWORDS = new HashSet<>(Arrays.asList(
             "password", "password1", "password123", "password@123",
@@ -224,18 +99,109 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             "p@ssw0rd", "p@ssword"
     ));
 
-    private int countPasswordComplexity(String password) {
-        int count = 0;
-        if (password.matches(".*[A-Za-z].*")) {
-            count++;
+    @Override
+    public LoginUserDTO login(String username, String password) {
+        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
         }
-        if (password.matches(".*\\d.*")) {
-            count++;
+        if (!passwordEncoder.matches(password, user.getPassword())) {
+            throw new BusinessException(ErrorCode.PASSWORD_ERROR);
         }
-        if (password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?].*")) {
-            count++;
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            throw new BusinessException(ErrorCode.ACCOUNT_DISABLED);
         }
-        return count;
+
+        List<Role> roles = roleService.getRolesByUserId(user.getId());
+        List<Permission> permissions = permissionService.getPermissionsByUserId(user.getId());
+        List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
+        List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
+        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+
+        String accessToken = jwtUtils.generateAccessToken(username, user.getId(), roleCodes, permissionCodes);
+        String refreshToken = jwtUtils.generateRefreshToken(username, user.getId());
+
+        LoginUserDTO dto = new LoginUserDTO();
+        dto.setToken(accessToken);
+        dto.setRefreshToken(refreshToken);
+        dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
+        dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
+        populateUserInfo(dto, user, roles, permissions, roleCodes, permissionCodes, depts);
+        return dto;
+    }
+
+    @Override
+    public RefreshTokenDTO refreshToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.trim().isEmpty()) {
+            throw new BusinessException(ErrorCode.REFRESH_TOKEN_MISSING);
+        }
+
+        if (!jwtUtils.validateToken(refreshToken)) {
+            throw new BusinessException(ErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        if (!jwtUtils.isRefreshToken(refreshToken)) {
+            throw new BusinessException(ErrorCode.REFRESH_TOKEN_TYPE_ERROR);
+        }
+
+        String username = jwtUtils.getUsernameFromToken(refreshToken);
+        Long userId = jwtUtils.getUserIdFromToken(refreshToken);
+
+        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) {
+            throw new BusinessException(ErrorCode.REFRESH_USER_NOT_FOUND);
+        }
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            throw new BusinessException(ErrorCode.REFRESH_ACCOUNT_DISABLED);
+        }
+        if (!user.getId().equals(userId)) {
+            throw new BusinessException(ErrorCode.REFRESH_TOKEN_INVALID);
+        }
+
+        validateTokenNotBeforePasswordChange(refreshToken, user.getPasswordChangedAt());
+
+        List<Role> roles = roleService.getRolesByUserId(user.getId());
+        List<Permission> permissions = permissionService.getPermissionsByUserId(user.getId());
+        List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
+        List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
+        List<Dept> depts = deptService.getDeptsByUserId(user.getId());
+
+        String newAccessToken = jwtUtils.generateAccessToken(username, user.getId(), roleCodes, permissionCodes);
+        String newRefreshToken = jwtUtils.generateRefreshToken(username, user.getId());
+
+        RefreshTokenDTO dto = new RefreshTokenDTO();
+        dto.setToken(newAccessToken);
+        dto.setRefreshToken(newRefreshToken);
+        dto.setAccessTokenExpiresIn(jwtUtils.getAccessTokenExpiration());
+        dto.setRefreshTokenExpiresIn(jwtUtils.getRefreshTokenExpiration());
+        dto.setDepts(depts);
+        return dto;
+    }
+
+    @Override
+    public void changePassword(String username, ChangePasswordDTO dto) {
+        if (!dto.getNewPassword().equals(dto.getConfirmPassword())) {
+            throw new BusinessException(ErrorCode.CONFIRM_PASSWORD_MISMATCH);
+        }
+        User user = this.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
+        }
+        if (!passwordEncoder.matches(dto.getOldPassword(), user.getPassword())) {
+            throw new BusinessException(ErrorCode.OLD_PASSWORD_ERROR);
+        }
+        if (passwordEncoder.matches(dto.getNewPassword(), user.getPassword())) {
+            throw new BusinessException(ErrorCode.SAME_AS_OLD_PASSWORD);
+        }
+        if (WEAK_PASSWORDS.contains(dto.getNewPassword().toLowerCase())) {
+            throw new BusinessException(ErrorCode.WEAK_PASSWORD);
+        }
+        if (countPasswordComplexity(dto.getNewPassword()) < 2) {
+            throw new BusinessException(ErrorCode.INSUFFICIENT_COMPLEXITY);
+        }
+        user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
+        user.setPasswordChangedAt(LocalDateTime.now());
+        this.updateById(user);
     }
 
     @Override
@@ -264,66 +230,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Override
     public Page<User> pageWithDept(Page<User> page, LambdaQueryWrapper<User> wrapper, Long deptId) {
-        if (deptId != null) {
-            List<Long> deptIds = deptService.getChildDeptIds(deptId);
-            if (deptIds != null && !deptIds.isEmpty()) {
-                List<UserDept> userDepts = userDeptMapper.selectList(
-                        new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
-                if (userDepts != null && !userDepts.isEmpty()) {
-                    List<Long> userIds = userDepts.stream()
-                            .map(UserDept::getUserId)
-                            .distinct()
-                            .collect(Collectors.toList());
-                    if (!userIds.isEmpty()) {
-                        wrapper.in(User::getId, userIds);
-                    } else {
-                        wrapper.eq(User::getId, -1L);
-                    }
-                } else {
-                    wrapper.eq(User::getId, -1L);
-                }
-            } else {
-                wrapper.eq(User::getId, -1L);
-            }
-        }
-
+        applyDeptFilter(wrapper, deptId);
         Page<User> resultPage = this.page(page, wrapper);
-        List<User> records = resultPage.getRecords();
-        if (records != null && !records.isEmpty()) {
-            List<Long> userIds = records.stream().map(User::getId).collect(Collectors.toList());
-            List<UserDept> allUserDepts;
-            if (userIds.isEmpty()) {
-                allUserDepts = new ArrayList<>();
-            } else {
-                allUserDepts = userDeptMapper.selectList(
-                        new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
-            }
-            List<Long> allDeptIds = allUserDepts.stream()
-                    .map(UserDept::getDeptId)
-                    .distinct()
-                    .collect(Collectors.toList());
-            List<Dept> allDepts = deptService.listByIds(allDeptIds);
-            Map<Long, Dept> deptMap = allDepts.stream()
-                    .collect(Collectors.toMap(Dept::getId, dept -> dept));
-            Map<Long, List<Dept>> userDeptMap = allUserDepts.stream()
-                    .collect(Collectors.groupingBy(
-                            UserDept::getUserId,
-                            Collectors.mapping(
-                                    ud -> deptMap.get(ud.getDeptId()),
-                                    Collectors.toList()
-                            )
-                    ));
-            for (User user : records) {
-                user.setDepts(userDeptMap.getOrDefault(user.getId(), new ArrayList<>()));
-            }
-        }
+        fillUserDepts(resultPage.getRecords());
         return resultPage;
     }
-
-    private static final Pattern EMAIL_PATTERN = Pattern.compile(
-            "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
-
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Override
     public void downloadTemplate(OutputStream outputStream) {
@@ -450,30 +361,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Override
     public void exportUsers(OutputStream outputStream, LambdaQueryWrapper<User> wrapper, Long deptId) {
-        List<User> users;
-        if (deptId != null) {
-            List<Long> deptIds = deptService.getChildDeptIds(deptId);
-            if (deptIds != null && !deptIds.isEmpty()) {
-                List<UserDept> userDepts = userDeptMapper.selectList(
-                        new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
-                if (userDepts != null && !userDepts.isEmpty()) {
-                    List<Long> userIds = userDepts.stream()
-                            .map(UserDept::getUserId)
-                            .distinct()
-                            .collect(Collectors.toList());
-                    if (!userIds.isEmpty()) {
-                        wrapper.in(User::getId, userIds);
-                    } else {
-                        wrapper.eq(User::getId, -1L);
-                    }
-                } else {
-                    wrapper.eq(User::getId, -1L);
-                }
-            } else {
-                wrapper.eq(User::getId, -1L);
-            }
-        }
-        users = this.list(wrapper);
+        applyDeptFilter(wrapper, deptId);
+        List<User> users = this.list(wrapper);
 
         List<UserExportDTO> exportList = new ArrayList<>();
         if (!users.isEmpty()) {
@@ -520,5 +409,105 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         EasyExcel.write(outputStream, UserExportDTO.class)
                 .sheet("用户列表")
                 .doWrite(exportList);
+    }
+
+    private void populateUserInfo(LoginUserDTO dto, User user, List<Role> roles,
+                                  List<Permission> permissions, List<String> roleCodes,
+                                  List<String> permissionCodes, List<Dept> depts) {
+        dto.setUserId(user.getId());
+        dto.setUsername(user.getUsername());
+        dto.setNickname(user.getNickname());
+        dto.setEmail(user.getEmail());
+        dto.setAvatar(user.getAvatar());
+        dto.setStatus(user.getStatus());
+        dto.setCreateTime(user.getCreateTime());
+        dto.setUpdateTime(user.getUpdateTime());
+        dto.setRoles(roles);
+        dto.setPermissions(permissions);
+        dto.setRoleCodes(roleCodes);
+        dto.setPermissionCodes(permissionCodes);
+        dto.setDepts(depts);
+    }
+
+    private void applyDeptFilter(LambdaQueryWrapper<User> wrapper, Long deptId) {
+        if (deptId == null) {
+            return;
+        }
+        List<Long> deptIds = deptService.getChildDeptIds(deptId);
+        if (deptIds == null || deptIds.isEmpty()) {
+            wrapper.eq(User::getId, -1L);
+            return;
+        }
+        List<UserDept> userDepts = userDeptMapper.selectList(
+                new LambdaQueryWrapper<UserDept>().in(UserDept::getDeptId, deptIds));
+        if (userDepts == null || userDepts.isEmpty()) {
+            wrapper.eq(User::getId, -1L);
+            return;
+        }
+        List<Long> userIds = userDepts.stream()
+                .map(UserDept::getUserId)
+                .distinct()
+                .collect(Collectors.toList());
+        if (userIds.isEmpty()) {
+            wrapper.eq(User::getId, -1L);
+        } else {
+            wrapper.in(User::getId, userIds);
+        }
+    }
+
+    private void fillUserDepts(List<User> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        List<Long> userIds = records.stream().map(User::getId).collect(Collectors.toList());
+        List<UserDept> allUserDepts = userDeptMapper.selectList(
+                new LambdaQueryWrapper<UserDept>().in(UserDept::getUserId, userIds));
+        List<Long> allDeptIds = allUserDepts.stream()
+                .map(UserDept::getDeptId)
+                .distinct()
+                .collect(Collectors.toList());
+        List<Dept> allDepts = deptService.listByIds(allDeptIds);
+        Map<Long, Dept> deptMap = allDepts.stream()
+                .collect(Collectors.toMap(Dept::getId, dept -> dept));
+        Map<Long, List<Dept>> userDeptMap = allUserDepts.stream()
+                .collect(Collectors.groupingBy(
+                        UserDept::getUserId,
+                        Collectors.mapping(
+                                ud -> deptMap.get(ud.getDeptId()),
+                                Collectors.toList()
+                        )
+                ));
+        for (User user : records) {
+            user.setDepts(userDeptMap.getOrDefault(user.getId(), new ArrayList<>()));
+        }
+    }
+
+    private void validateTokenNotBeforePasswordChange(String token, LocalDateTime passwordChangedAt) {
+        if (passwordChangedAt == null) {
+            return;
+        }
+        java.util.Date tokenIssuedAt = jwtUtils.parseClaims(token).getIssuedAt();
+        if (tokenIssuedAt == null) {
+            return;
+        }
+        LocalDateTime tokenIssuedDateTime = tokenIssuedAt.toInstant()
+                .atZone(java.time.ZoneId.systemDefault()).toLocalDateTime();
+        if (tokenIssuedDateTime.isBefore(passwordChangedAt)) {
+            throw new BusinessException(ErrorCode.PASSWORD_CHANGED);
+        }
+    }
+
+    private int countPasswordComplexity(String password) {
+        int count = 0;
+        if (password.matches(".*[A-Za-z].*")) {
+            count++;
+        }
+        if (password.matches(".*\\d.*")) {
+            count++;
+        }
+        if (password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?].*")) {
+            count++;
+        }
+        return count;
     }
 }

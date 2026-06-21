@@ -57,7 +57,7 @@ public class AuditLogAspect {
         if (request != null) {
             auditLog.setIp(getClientIp(request));
 
-            String token = getJwtFromRequest(request);
+            String token = jwtUtils.extractTokenFromRequest(request);
             if (StringUtils.hasText(token) && jwtUtils.validateToken(token)) {
                 String username = jwtUtils.getUsernameFromToken(token);
                 Long userId = jwtUtils.getUserIdFromToken(token);
@@ -236,11 +236,4 @@ public class AuditLogAspect {
         return ip;
     }
 
-    private String getJwtFromRequest(HttpServletRequest request) {
-        String bearerToken = request.getHeader("Authorization");
-        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
-            return bearerToken.substring(7);
-        }
-        return null;
-    }
 }

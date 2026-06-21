@@ -11,21 +11,27 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(BusinessException.class)
+    public Result<String> handleBusinessException(BusinessException e) {
+        log.warn("业务异常: code={}, message={}", e.getCode(), e.getMessage());
+        return Result.error(e.getCode(), e.getMessage());
+    }
+
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public Result<String> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
         log.warn("文件大小超出限制: {}", e.getMessage());
         return Result.error(413, "上传的文件大小超出限制，请选择小于20MB的图片");
     }
 
-    @ExceptionHandler(Exception.class)
-    public Result<String> handleException(Exception e) {
-        log.error("系统异常: ", e);
-        return Result.error(e.getMessage() != null ? e.getMessage() : "系统内部错误");
-    }
-
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public Result<String> handleValidationException(MethodArgumentNotValidException e) {
         String message = e.getBindingResult().getFieldError().getDefaultMessage();
         return Result.error(400, message);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public Result<String> handleException(Exception e) {
+        log.error("系统异常: ", e);
+        return Result.error(e.getMessage() != null ? e.getMessage() : "系统内部错误");
     }
 }

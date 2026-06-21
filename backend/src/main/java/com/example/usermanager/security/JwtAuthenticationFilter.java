@@ -16,7 +16,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -55,40 +54,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        String token = getJwtFromRequest(request);
+        String token = jwtUtils.extractTokenFromRequest(request);
 
-        if (StringUtils.hasText(token) && jwtUtils.validateToken(token)) {
+        if (token != null && jwtUtils.validateToken(token)) {
             if (!jwtUtils.isAccessToken(token)) {
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.setContentType("application/json;charset=UTF-8");
-                Map<String, Object> result = new HashMap<>();
-                result.put("code", 401);
-                result.put("message", "令牌类型错误，请使用访问令牌");
-                result.put("data", null);
-                response.getWriter().write(objectMapper.writeValueAsString(result));
+                writeAuthError(response, HttpServletResponse.SC_UNAUTHORIZED, 401, "令牌类型错误，请使用访问令牌");
                 return;
             }
 
             String username = jwtUtils.getUsernameFromToken(token);
             User user = userService.getOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
             if (user == null) {
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.setContentType("application/json;charset=UTF-8");
-                Map<String, Object> result = new HashMap<>();
-                result.put("code", 401);
-                result.put("message", "用户不存在，请重新登录");
-                result.put("data", null);
-                response.getWriter().write(objectMapper.writeValueAsString(result));
+                writeAuthError(response, HttpServletResponse.SC_UNAUTHORIZED, 401, "用户不存在，请重新登录");
                 return;
             }
             if (user.getStatus() != null && user.getStatus() == 0) {
-                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                response.setContentType("application/json;charset=UTF-8");
-                Map<String, Object> result = new HashMap<>();
-                result.put("code", 403);
-                result.put("message", "账号已被禁用，请联系管理员");
-                result.put("data", null);
-                response.getWriter().write(objectMapper.writeValueAsString(result));
+                writeAuthError(response, HttpServletResponse.SC_FORBIDDEN, 403, "账号已被禁用，请联系管理员");
                 return;
             }
             if (user.getPasswordChangedAt() != null) {
@@ -97,13 +78,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     LocalDateTime tokenIssuedAt = claims.getIssuedAt().toInstant()
                             .atZone(ZoneId.systemDefault()).toLocalDateTime();
                     if (tokenIssuedAt.isBefore(user.getPasswordChangedAt())) {
-                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                        response.setContentType("application/json;charset=UTF-8");
-                        Map<String, Object> result = new HashMap<>();
-                        result.put("code", 401);
-                        result.put("message", "密码已修改，请重新登录");
-                        result.put("data", null);
-                        response.getWriter().write(objectMapper.writeValueAsString(result));
+                        writeAuthError(response, HttpServletResponse.SC_UNAUTHORIZED, 401, "密码已修改，请重新登录");
                         return;
                     }
                 }
@@ -130,11 +105,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    private String getJwtFromRequest(HttpServletRequest request) {
-        String bearerToken = request.getHeader("Authorization");
-        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
-            return bearerToken.substring(7);
-        }
-        return null;
+    private void writeAuthError(HttpServletResponse response, int httpStatus, int code, String message) throws IOException {
+        response.setStatus(httpStatus);
+        response.setContentType("application/json;charset=UTF-8");
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", code);
+        result.put("message", message);
+        result.put("data", null);
+        response.getWriter().write(objectMapper.writeValueAsString(result));
     }
 }

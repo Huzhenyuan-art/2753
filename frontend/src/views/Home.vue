@@ -503,19 +503,20 @@ import { Upload, Notebook, Loading, CircleCheckFilled, CircleCloseFilled, Lock, 
 import request from '@/utils/request'
 import { useUserStore } from '@/store/user'
 import type { DeptInfo } from '@/store/user'
+import { handleBlobDownloadResponse } from '@/utils/download'
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const defaultAvatar = 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png'
 
-const canList = computed(() => userStore.hasPermission('user:list') || userStore.isAdmin)
-const canAdd = computed(() => userStore.hasPermission('user:add') || userStore.isAdmin)
-const canEdit = computed(() => userStore.hasPermission('user:edit') || userStore.isAdmin)
-const canDelete = computed(() => userStore.hasPermission('user:delete') || userStore.isAdmin)
-const canChangeStatus = computed(() => userStore.hasPermission('user:status') || userStore.isAdmin)
+const canList = computed(() => userStore.hasPermission('user:list'))
+const canAdd = computed(() => userStore.hasPermission('user:add'))
+const canEdit = computed(() => userStore.hasPermission('user:edit'))
+const canDelete = computed(() => userStore.hasPermission('user:delete'))
+const canChangeStatus = computed(() => userStore.hasPermission('user:status'))
 const canEditRole = computed(() => userStore.isAdmin)
-const canViewAudit = computed(() => userStore.hasPermission('audit:list') || userStore.isAdmin)
+const canViewAudit = computed(() => userStore.hasPermission('audit:list'))
 
 const hasAnyAction = computed(() => canEdit.value || canDelete.value || canChangeStatus.value || canEditRole.value)
 const actionColumnWidth = computed(() => {
@@ -1197,64 +1198,6 @@ const goDept = () => {
 
 const goSystemMonitor = () => {
   router.push('/system-monitor')
-}
-
-const EXCEL_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-
-const readBlobAsText = (blob: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(reader.error)
-    reader.readAsText(blob, 'utf-8')
-  })
-}
-
-const triggerBlobDownload = (blob: Blob, filename: string) => {
-  const downloadUrl = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = downloadUrl
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(downloadUrl)
-}
-
-const handleBlobDownloadResponse = async (response: any, fallbackFilename: string) => {
-  const data = response.data
-  if (!(data instanceof Blob)) {
-    ElMessage.error('响应格式异常')
-    return
-  }
-
-  if (data.type === EXCEL_CONTENT_TYPE || data.size > 0 && !data.type.includes('json')) {
-    let filename = fallbackFilename
-    try {
-      const contentDisposition = (response.headers as any)?.['content-disposition']
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i)
-        if (match && match[1]) {
-          filename = decodeURIComponent(match[1].trim().replace(/^["']|["']$/g, ''))
-        }
-      }
-    } catch {}
-    triggerBlobDownload(data, filename)
-    ElMessage.success('下载成功')
-    return
-  }
-
-  try {
-    const text = await readBlobAsText(data)
-    const json = JSON.parse(text)
-    if (json.message) {
-      ElMessage.error(json.message)
-    } else {
-      ElMessage.error('下载失败')
-    }
-  } catch {
-    ElMessage.error('下载失败')
-  }
 }
 
 const handleDownloadTemplate = async () => {

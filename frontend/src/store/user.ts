@@ -93,6 +93,7 @@ export const useUserStore = defineStore('user', {
       return false
     },
     hasPermission: (state) => (permissionCode: string): boolean => {
+      if (state.userInfo?.roleCodes?.includes('ADMIN')) return true
       if (state.userInfo?.permissionCodes) {
         return state.userInfo.permissionCodes.includes(permissionCode)
       }

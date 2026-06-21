@@ -17,6 +17,7 @@ import com.example.usermanager.service.DeptService;
 import com.example.usermanager.service.PermissionService;
 import com.example.usermanager.service.RoleService;
 import com.example.usermanager.service.UserService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -33,7 +34,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -56,55 +56,20 @@ public class UserController {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @PostMapping("/login")
     @AuditLog(operation = "LOGIN", module = "用户管理", description = "用户登录", recordParams = false, recordResult = false)
     public Result<LoginUserDTO> login(@RequestBody Map<String, String> loginData) {
-        String username = loginData.get("username");
-        String password = loginData.get("password");
-        try {
-            LoginUserDTO loginUser = userService.login(username, password);
-            return Result.success(loginUser);
-        } catch (RuntimeException e) {
-            String errorCode = e.getMessage();
-            switch (errorCode) {
-                case "USER_NOT_FOUND":
-                    return Result.error(10001, "用户名不存在");
-                case "PASSWORD_ERROR":
-                    return Result.error(10002, "密码错误");
-                case "ACCOUNT_DISABLED":
-                    return Result.error(10003, "账号已被禁用，请联系管理员");
-                default:
-                    return Result.error(401, "登录失败，请重试");
-            }
-        }
+        LoginUserDTO loginUser = userService.login(loginData.get("username"), loginData.get("password"));
+        return Result.success(loginUser);
     }
 
     @PostMapping("/refresh")
     @AuditLog(operation = "REFRESH_TOKEN", module = "用户管理", description = "刷新访问令牌", recordParams = false, recordResult = false)
     public Result<RefreshTokenDTO> refreshToken(@RequestBody Map<String, String> body) {
-        String refreshToken = body.get("refreshToken");
-        try {
-            RefreshTokenDTO dto = userService.refreshToken(refreshToken);
-            return Result.success(dto);
-        } catch (RuntimeException e) {
-            String errorCode = e.getMessage();
-            switch (errorCode) {
-                case "REFRESH_TOKEN_MISSING":
-                    return Result.error(10010, "刷新令牌缺失");
-                case "REFRESH_TOKEN_INVALID":
-                    return Result.error(10011, "刷新令牌无效或已过期，请重新登录");
-                case "REFRESH_TOKEN_TYPE_ERROR":
-                    return Result.error(10012, "令牌类型错误，请使用刷新令牌");
-                case "USER_NOT_FOUND":
-                    return Result.error(10013, "用户不存在，请重新登录");
-                case "ACCOUNT_DISABLED":
-                    return Result.error(10014, "账号已被禁用，请联系管理员");
-                case "PASSWORD_CHANGED":
-                    return Result.error(10015, "密码已修改，请重新登录");
-                default:
-                    return Result.error(10016, "刷新令牌失败，请重新登录");
-            }
-        }
+        RefreshTokenDTO dto = userService.refreshToken(body.get("refreshToken"));
+        return Result.success(dto);
     }
 
     @GetMapping("/list")
@@ -116,35 +81,7 @@ public class UserController {
                                  @RequestParam(required = false) String sortField,
                                  @RequestParam(required = false) String sortOrder) {
         Page<User> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-        if (StringUtils.hasText(username)) {
-            wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
-        }
-        if (status != null) {
-            wrapper.eq(User::getStatus, status);
-        }
-        boolean sortApplied = false;
-        if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
-            boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
-            if ("username".equals(sortField)) {
-                if (isAsc) {
-                    wrapper.orderByAsc(User::getUsername);
-                } else {
-                    wrapper.orderByDesc(User::getUsername);
-                }
-                sortApplied = true;
-            } else if ("createTime".equals(sortField)) {
-                if (isAsc) {
-                    wrapper.orderByAsc(User::getCreateTime);
-                } else {
-                    wrapper.orderByDesc(User::getCreateTime);
-                }
-                sortApplied = true;
-            }
-        }
-        if (!sortApplied) {
-            wrapper.orderByDesc(User::getCreateTime);
-        }
+        LambdaQueryWrapper<User> wrapper = buildUserQueryWrapper(username, status, sortField, sortOrder);
         return Result.success(userService.pageWithDept(page, wrapper, deptId));
     }
 
@@ -215,28 +152,8 @@ public class UserController {
     @AuditLog(operation = "CHANGE_PASSWORD", module = "用户管理", description = "修改密码", recordParams = false, recordResult = false)
     public Result<String> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
         String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        try {
-            userService.changePassword(username, dto);
-            return Result.success("密码修改成功，请重新登录");
-        } catch (RuntimeException e) {
-            String errorCode = e.getMessage();
-            switch (errorCode) {
-                case "USER_NOT_FOUND":
-                    return Result.error(404, "用户不存在");
-                case "OLD_PASSWORD_ERROR":
-                    return Result.error(10004, "旧密码错误");
-                case "SAME_AS_OLD_PASSWORD":
-                    return Result.error(10005, "新密码不能与旧密码相同");
-                case "CONFIRM_PASSWORD_MISMATCH":
-                    return Result.error(10006, "确认密码与新密码不一致");
-                case "WEAK_PASSWORD":
-                    return Result.error(10007, "密码过于常见，请选择更复杂的密码");
-                case "INSUFFICIENT_COMPLEXITY":
-                    return Result.error(10008, "密码复杂度不足，需包含字母、数字、特殊字符中的至少两种");
-                default:
-                    return Result.error(500, "密码修改失败，请重试");
-            }
-        }
+        userService.changePassword(username, dto);
+        return Result.success("密码修改成功，请重新登录");
     }
 
     @GetMapping("/info")
@@ -251,7 +168,6 @@ public class UserController {
         List<Permission> permissions = permissionService.getPermissionsByUserId(user.getId());
         List<String> roleCodes = roles.stream().map(Role::getCode).collect(Collectors.toList());
         List<String> permissionCodes = permissions.stream().map(Permission::getCode).collect(Collectors.toList());
-
         List<Dept> depts = deptService.getDeptsByUserId(user.getId());
 
         LoginUserDTO dto = new LoginUserDTO();
@@ -313,41 +229,9 @@ public class UserController {
     @GetMapping("/template")
     @AuditLog(operation = "DOWNLOAD_TEMPLATE", module = "用户管理", description = "下载用户导入模板")
     public void downloadTemplate(HttpServletResponse response) throws IOException {
-        ServletOutputStream outputStream = null;
-        try {
-            response.reset();
-            response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            response.setCharacterEncoding("utf-8");
-            response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-            response.setHeader("Pragma", "no-cache");
-            response.setHeader("Expires", "0");
-            String fileName = URLEncoder.encode("用户导入模板", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
-            response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
-            outputStream = response.getOutputStream();
+        writeExcelResponse(response, "用户导入模板", outputStream -> {
             userService.downloadTemplate(outputStream);
-            outputStream.flush();
-        } catch (Exception e) {
-            log.error("下载模板失败: ", e);
-            try {
-                if (outputStream != null) {
-                    outputStream.close();
-                }
-            } catch (IOException ignored) {}
-            response.reset();
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.setContentType("application/json;charset=UTF-8");
-            Map<String, Object> result = new HashMap<>();
-            result.put("code", 500);
-            result.put("message", "下载模板失败：" + (e.getMessage() != null ? e.getMessage() : "系统内部错误"));
-            result.put("data", null);
-            response.getWriter().write(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(result));
-        } finally {
-            if (outputStream != null) {
-                try {
-                    outputStream.close();
-                } catch (IOException ignored) {}
-            }
-        }
+        });
     }
 
     @PostMapping("/import")
@@ -361,12 +245,8 @@ public class UserController {
                 && !originalFilename.toLowerCase().endsWith(".xls"))) {
             return Result.error(400, "仅支持 Excel 文件格式（.xlsx 或 .xls）");
         }
-        try {
-            UserImportResult result = userService.importUsers(file);
-            return Result.success(result);
-        } catch (RuntimeException e) {
-            return Result.error(500, "导入失败：" + e.getMessage());
-        }
+        UserImportResult result = userService.importUsers(file);
+        return Result.success(result);
     }
 
     @GetMapping("/export")
@@ -377,69 +257,71 @@ public class UserController {
                             @RequestParam(required = false) String sortField,
                             @RequestParam(required = false) String sortOrder,
                             HttpServletResponse response) throws IOException {
-        ServletOutputStream outputStream = null;
-        try {
-            LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-            if (StringUtils.hasText(username)) {
-                wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
-            }
-            if (status != null) {
-                wrapper.eq(User::getStatus, status);
-            }
-            boolean sortApplied = false;
-            if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
-                boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
-                if ("username".equals(sortField)) {
-                    if (isAsc) {
-                        wrapper.orderByAsc(User::getUsername);
-                    } else {
-                        wrapper.orderByDesc(User::getUsername);
-                    }
-                    sortApplied = true;
-                } else if ("createTime".equals(sortField)) {
-                    if (isAsc) {
-                        wrapper.orderByAsc(User::getCreateTime);
-                    } else {
-                        wrapper.orderByDesc(User::getCreateTime);
-                    }
-                    sortApplied = true;
-                }
-            }
-            if (!sortApplied) {
+        LambdaQueryWrapper<User> wrapper = buildUserQueryWrapper(username, status, sortField, sortOrder);
+        writeExcelResponse(response, "用户列表", outputStream -> {
+            userService.exportUsers(outputStream, wrapper, deptId);
+        });
+    }
+
+    private LambdaQueryWrapper<User> buildUserQueryWrapper(String username, Integer status,
+                                                            String sortField, String sortOrder) {
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(username)) {
+            wrapper.like(User::getUsername, username).or().like(User::getNickname, username);
+        }
+        if (status != null) {
+            wrapper.eq(User::getStatus, status);
+        }
+        if (StringUtils.hasText(sortField) && StringUtils.hasText(sortOrder)) {
+            boolean isAsc = "asc".equalsIgnoreCase(sortOrder);
+            if ("username".equals(sortField)) {
+                wrapper.orderBy(true, isAsc, User::getUsername);
+            } else if ("createTime".equals(sortField)) {
+                wrapper.orderBy(true, isAsc, User::getCreateTime);
+            } else {
                 wrapper.orderByDesc(User::getCreateTime);
             }
+        } else {
+            wrapper.orderByDesc(User::getCreateTime);
+        }
+        return wrapper;
+    }
 
+    @FunctionalInterface
+    private interface ExcelWriter {
+        void write(ServletOutputStream outputStream) throws Exception;
+    }
+
+    private void writeExcelResponse(HttpServletResponse response, String fileName, ExcelWriter writer) throws IOException {
+        ServletOutputStream outputStream = null;
+        try {
             response.reset();
             response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             response.setCharacterEncoding("utf-8");
             response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
             response.setHeader("Pragma", "no-cache");
             response.setHeader("Expires", "0");
-            String fileName = URLEncoder.encode("用户列表", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
-            response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
+            String encodedFileName = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replaceAll("\\+", "%20");
+            response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + encodedFileName + ".xlsx");
             outputStream = response.getOutputStream();
-            userService.exportUsers(outputStream, wrapper, deptId);
+            writer.write(outputStream);
             outputStream.flush();
         } catch (Exception e) {
-            log.error("导出用户列表失败: ", e);
-            try {
-                if (outputStream != null) {
-                    outputStream.close();
-                }
-            } catch (IOException ignored) {}
+            log.error("{}失败: ", fileName, e);
+            if (outputStream != null) {
+                try { outputStream.close(); } catch (IOException ignored) {}
+            }
             response.reset();
             response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
             response.setContentType("application/json;charset=UTF-8");
-            Map<String, Object> result = new HashMap<>();
+            Map<String, Object> result = new java.util.HashMap<>();
             result.put("code", 500);
-            result.put("message", "导出失败：" + (e.getMessage() != null ? e.getMessage() : "系统内部错误"));
+            result.put("message", fileName + "失败：" + (e.getMessage() != null ? e.getMessage() : "系统内部错误"));
             result.put("data", null);
-            response.getWriter().write(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(result));
+            response.getWriter().write(objectMapper.writeValueAsString(result));
         } finally {
             if (outputStream != null) {
-                try {
-                    outputStream.close();
-                } catch (IOException ignored) {}
+                try { outputStream.close(); } catch (IOException ignored) {}
             }
         }
     }
