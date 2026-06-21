@@ -1,0 +1,15 @@
+FROM maven:3.9.6-eclipse-temurin-17 AS build
+WORKDIR /app
+
+COPY settings.xml .
+COPY pom.xml .
+RUN mvn -s settings.xml dependency:go-offline -B -q
+
+COPY src ./src
+
+EXPOSE 8080 5005
+
+ENV SPRING_OUTPUT_ANSI_ENABLED=ALWAYS \
+    JAVA_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+
+CMD ["sh", "-c", "mvn -s settings.xml spring-boot:run -Dspring-boot.run.jvmArguments=\"$JAVA_OPTS\""]

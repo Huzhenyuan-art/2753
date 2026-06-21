@@ -1,37 +1,51 @@
 services:
   db:
-    image: mysql:8.0
-    container_name: user-manager-db
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    container_name: ${COMPOSE_PROJECT_NAME:-user-manager}-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: user_management
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-user_management}
+      TZ: ${TZ:-Asia/Shanghai}
     ports:
-      - "12753:3306"
+      - "${MYSQL_PUBLISH_PORT:-12753}:3306"
     volumes:
-      - ./backend/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./backend/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - mysql_data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    command: --character-set-server=${MYSQL_CHARSET:-utf8mb4} --collation-server=${MYSQL_COLLATION:-utf8mb4_unicode_ci}
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 60s
 
   backend:
-    build: ./backend
-    container_name: user-manager-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-production}
+    container_name: ${COMPOSE_PROJECT_NAME:-user-manager}-backend
     restart: unless-stopped
     ports:
-      - "22753:8080"
+      - "${BACKEND_PUBLISH_PORT:-22753}:8080"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-production}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-root}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-3600000}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-604800000}
+      FILE_UPLOAD_DIR: ${FILE_UPLOAD_DIR:-/app/uploads/avatars}
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - avatar_data:/app/uploads/avatars
+      - backend_logs:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
       interval: 10s
@@ -40,15 +54,22 @@ services:
       start_period: 60s
 
   frontend:
-    build: ./frontend
-    container_name: user-manager-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    container_name: ${COMPOSE_PROJECT_NAME:-user-manager}-frontend
     restart: unless-stopped
     ports:
-      - "32753:80"
+      - "${FRONTEND_PUBLISH_PORT:-32753}:80"
     depends_on:
       backend:
         condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
 
 volumes:
   mysql_data:
   avatar_data:
+  backend_logs:

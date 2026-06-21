@@ -1,24 +1,31 @@
-# Build stage
-FROM maven:3.9-eclipse-temurin-17 AS build
+FROM maven:3.9.6-eclipse-temurin-17 AS dependency
 WORKDIR /app
-
-# Copy settings and pom
 COPY settings.xml .
 COPY pom.xml .
+RUN mvn -s settings.xml dependency:go-offline -B -q
 
-# Pre-download dependencies
-RUN mvn -s settings.xml dependency:go-offline -B
-
-# Copy source and build
-COPY src ./src
-RUN mvn -s settings.xml package -DskipTests
-
-# Run stage
-FROM eclipse-temurin:17-jre
+FROM dependency AS build
 WORKDIR /app
-COPY --from=build /app/target/*.jar app.jar
+COPY src ./src
+RUN mvn -s settings.xml package -DskipTests -B -q \
+    && java -Djarmode=layertools -jar target/*.jar extract --destination target/extracted
 
-RUN mkdir -p /app/uploads/avatars && chmod -R 755 /app/uploads
+FROM eclipse-temurin:17-jre-alpine AS runtime
+WORKDIR /app
+
+RUN addgroup -S spring && adduser -S spring -G spring \
+    && mkdir -p /app/uploads/avatars /app/logs \
+    && chown -R spring:spring /app
+
+USER spring:spring
+
+COPY --from=build /app/target/extracted/dependencies/ ./
+COPY --from=build /app/target/extracted/spring-boot-loader/ ./
+COPY --from=build /app/target/extracted/snapshot-dependencies/ ./
+COPY --from=build /app/target/extracted/application/ ./
 
 EXPOSE 8080
-ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-jar", "app.jar"]
+
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -Dfile.encoding=UTF-8 org.springframework.boot.loader.launch.JarLauncher"]

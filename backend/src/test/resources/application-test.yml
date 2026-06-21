@@ -4,26 +4,25 @@ server:
 spring:
   application:
     name: user-manager-test
+  profiles:
+    active: test
   datasource:
-    url: jdbc:h2:mem:user_management_test;DB_CLOSE_DELAY=-1;MODE=MySQL;DATABASE_TO_LOWER=TRUE
-    username: sa
-    password:
-    driver-class-name: org.h2.Driver
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:user_management_test;DB_CLOSE_DELAY=-1;MODE=MySQL;DATABASE_TO_LOWER=TRUE}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
   sql:
     init:
       mode: always
       schema-locations: classpath:sql/schema-test.sql
       data-locations: classpath:sql/data-test.sql
-  jpa:
-    hibernate:
-      ddl-auto: none
   servlet:
     multipart:
       max-file-size: 20MB
       max-request-size: 30MB
 
 file:
-  upload-dir: ./target/test-uploads/avatars
+  upload-dir: ${FILE_UPLOAD_DIR:./target/test-uploads/avatars}
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
@@ -32,9 +31,9 @@ mybatis-plus:
     map-underscore-to-camel-case: true
 
 jwt:
-  secret: 9a4f2c8d3e5f1g7h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z
-  access-expiration: 3600000
-  refresh-expiration: 604800000
+  secret: ${JWT_SECRET:test_jwt_secret_key_9a4f2c8d3e5f1g7h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z}
+  access-expiration: ${JWT_ACCESS_EXPIRATION:3600000}
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800000}
 
 logging:
   level:

@@ -1,0 +1,85 @@
+services:
+  db:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    container_name: ${COMPOSE_PROJECT_NAME:-user-manager}-db-dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-user_management}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${MYSQL_PUBLISH_PORT:-12753}:3306"
+    volumes:
+      - ./backend/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mysql_data_dev:/var/lib/mysql
+    command: --character-set-server=${MYSQL_CHARSET:-utf8mb4} --collation-server=${MYSQL_COLLATION:-utf8mb4_unicode_ci}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+      args:
+        SPRING_PROFILES_ACTIVE: dev
+    container_name: ${COMPOSE_PROJECT_NAME:-user-manager}-backend-dev
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PUBLISH_PORT:-22753}:8080"
+      - "5005:5005"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/user_management?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_key_change_in_production}
+      JWT_ACCESS_EXPIRATION: 3600000
+      JWT_REFRESH_EXPIRATION: 604800000
+      FILE_UPLOAD_DIR: /app/uploads/avatars
+      TZ: ${TZ:-Asia/Shanghai}
+      JAVA_OPTS: -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+    volumes:
+      - ./backend/src:/app/src:ro
+      - ./backend/src/main/resources:/app/resources:ro
+      - avatar_data_dev:/app/uploads/avatars
+      - backend_logs_dev:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: ${COMPOSE_PROJECT_NAME:-user-manager}-frontend-dev
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PUBLISH_PORT:-32753}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      CHOKIDAR_USEPOLLING: "true"
+      VITE_API_BASE_URL: /api
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/index.html:/app/index.html:ro
+      - ./frontend/vite.config.ts:/app/vite.config.ts:ro
+      - ./frontend/tsconfig.json:/app/tsconfig.json:ro
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json:ro
+
+volumes:
+  mysql_data_dev:
+  avatar_data_dev:
+  backend_logs_dev:
