@@ -194,3 +194,131 @@ legacy-peer-deps=true
 - [npm ci 文档](https://docs.npmjs.com/cli/v10/commands/npm-ci)
 - [Pinia CHANGELOG](https://github.com/vuejs/pinia/blob/main/packages/pinia/CHANGELOG.md)
 - [npm peerDependencies 文档](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#peerdependencies)
+
+---
+
+## 三、TypeScript 编译错误修复
+
+### 问题描述
+
+前端项目在 TypeScript 编译过程中出现两个错误：
+1. `ImportMeta` 类型定义缺失错误
+2. `DeptInfo` 类型未导出错误
+
+---
+
+### 问题 1：ImportMeta 类型定义缺失
+
+#### 根因分析
+
+- 项目使用了 Vite 构建，在 `src/utils/request.ts` 中通过 `import.meta.env.VITE_API_URL` 访问环境变量
+- 项目中没有任何 `.d.ts` 类型声明文件来提供 Vite 客户端类型
+- `tsconfig.json` 的 `lib` 配置只包含 `["ESNext", "DOM"]`，不含 Vite 定义的 `ImportMeta` 扩展类型
+- TypeScript 无法识别 `import.meta.env` 的类型，导致编译报错
+
+#### 修复方案
+
+新增 `frontend/src/vite-env.d.ts` 文件：
+
+```typescript
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_API_URL: string
+  readonly VITE_API_PROXY_TARGET: string
+  readonly VITE_APP_ENV: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+```
+
+说明：
+- `/// <reference types="vite/client" />` 引入 Vite 官方提供的客户端类型声明（包含基础的 `ImportMeta` 定义和 `import.meta.env` 类型）
+- 自定义 `ImportMetaEnv` 接口显式列出项目使用的所有 `VITE_*` 环境变量，提供完整的类型提示和校验
+- `tsconfig.json` 已配置 `"include": ["src/**/*.ts", "src/**/*.d.ts", ...]`，新文件会被自动包含，无需修改配置
+
+#### 影响的文件
+
+| 文件 | 变更 |
+|---|---|
+| [vite-env.d.ts](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/frontend/src/vite-env.d.ts) | 新增（含 ImportMeta 类型扩展） |
+
+---
+
+### 问题 2：DeptInfo 类型未导出
+
+#### 根因分析
+
+- `DeptInfo` 接口定义在 `src/store/user.ts` 中（第 28 行），但未使用 `export` 关键字导出
+- `src/views/Home.vue`（第 505 行）和 `src/views/Dept.vue`（第 202 行）都尝试使用 `import type { DeptInfo } from '@/store/user'` 导入
+- TypeScript 严格模式下，模块内部未导出的类型无法被外部文件引用，导致编译报错 "Module has no exported member 'DeptInfo'"
+
+#### 修复方案
+
+在 `frontend/src/store/user.ts` 中为所有接口类型添加 `export` 关键字：
+
+```diff
+- interface RoleInfo {
++ export interface RoleInfo {
+    id: number
+    ...
+  }
+
+- interface PermissionInfo {
++ export interface PermissionInfo {
+    id: number
+    ...
+  }
+
+- interface DeptInfo {
++ export interface DeptInfo {
+    id: number
+    ...
+    children?: DeptInfo[]
+  }
+
+- interface UserInfo {
++ export interface UserInfo {
+    userId: number
+    ...
+  }
+```
+
+#### 验证导入文件
+
+所有导入 `DeptInfo` 的文件语句均正确，无需修改：
+
+| 文件 | 导入语句 | 状态 |
+|---|---|---|
+| [Home.vue](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/frontend/src/views/Home.vue#L505-L505) | `import type { DeptInfo } from '@/store/user'` | ✅ 正确 |
+| [Dept.vue](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/frontend/src/views/Dept.vue#L202-L202) | `import type { DeptInfo } from '@/store/user'` | ✅ 正确 |
+
+#### 影响的文件
+
+| 文件 | 变更 |
+|---|---|
+| [user.ts](file:///d:/Desktop/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20(2)/label-2753/2753/frontend/src/store/user.ts) | `RoleInfo`、`PermissionInfo`、`DeptInfo`、`UserInfo` 四个接口添加 `export` 关键字 |
+
+---
+
+### 验证方式
+
+```bash
+cd frontend
+
+# 1. 类型检查（核心验证）
+npm run type-check
+
+# 2. 构建验证
+npm run build
+```
+
+预期结果：TypeScript 编译通过，不再出现 `ImportMeta` 和 `DeptInfo` 相关错误。
+
+### 相关参考
+
+- [Vite 环境变量与模式](https://cn.vitejs.dev/guide/env-and-mode.html)
+- [Vite 客户端类型](https://cn.vitejs.dev/guide/features.html#client-types)
+- [TypeScript - Exporting types](https://www.typescriptlang.org/docs/handbook/2/modules.html#type-only-exports-and-imports)

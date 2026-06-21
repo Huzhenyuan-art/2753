@@ -8,7 +8,7 @@ import {
   JwtPayload,
 } from '@/utils/token'
 
-interface RoleInfo {
+export interface RoleInfo {
   id: number
   name: string
   code: string
@@ -16,7 +16,7 @@ interface RoleInfo {
   status: number
 }
 
-interface PermissionInfo {
+export interface PermissionInfo {
   id: number
   name: string
   code: string
@@ -25,7 +25,7 @@ interface PermissionInfo {
   status: number
 }
 
-interface DeptInfo {
+export interface DeptInfo {
   id: number
   name: string
   code: string
@@ -40,7 +40,7 @@ interface DeptInfo {
   children?: DeptInfo[]
 }
 
-interface UserInfo {
+export interface UserInfo {
   userId: number
   username: string
   nickname: string
